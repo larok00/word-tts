@@ -1,1 +1,12 @@
-{"private":true,"type":"module"}
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs",
+    "validate": "office-addin-manifest validate dist/manifest.xml"
+  },
+  "devDependencies": {
+    "office-addin-manifest": "^3.0.1"
+  }
+}
