@@ -17,9 +17,9 @@ document below. Do not push to the repo. Use computer use (screenshots, mouse,
 keyboard) to drive the real Word window, not COM automation: Word opened via
 COM does not load add-ins.
 
-Test document: %USERPROFILE%\read-aloud-plus-test\sample.docx (open it by
+Test document: %USERPROFILE%\Downloads\read-aloud-plus-test\sample.docx (a copy is in testing/fixtures in the repo; open it by
 double-clicking it in File Explorer if it isn't open already). Write results to
-%USERPROFILE%\read-aloud-plus-test\REPORT-round2.md as you go, and save a
+%USERPROFILE%\Downloads\read-aloud-plus-test\REPORT-round2.md as you go, and save a
 screenshot for each step next to it (step01.png, step02.png, ...).
 
 You cannot hear audio, so judge speech by what's on screen: the selected sentence
