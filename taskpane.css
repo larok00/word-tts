@@ -1,0 +1,113 @@
+/* Pane presentation and accessibility states for taskpane.html; no exports. */
+/* Large controls and strong focus indicators for mouse and keyboard readers. */
+:root {
+  font-family: 'Segoe UI', sans-serif;
+  font-size: 18px;
+  color: #17212b;
+  background: #fff;
+}
+body {
+  margin: 0;
+}
+main {
+  padding: 18px;
+  max-width: 650px;
+  margin: auto;
+}
+h1 {
+  font-size: 1.7rem;
+}
+h2 {
+  font-size: 1rem;
+}
+button,
+select,
+input {
+  font: inherit;
+}
+button,
+select {
+  min-height: 48px;
+  padding: 10px;
+  border: 2px solid #1d4b70;
+  border-radius: 6px;
+}
+button {
+  background: #154c79;
+  color: white;
+  cursor: pointer;
+}
+button:disabled {
+  background: #647582;
+  cursor: default;
+}
+:focus-visible {
+  outline: 4px solid #a94c00;
+  outline-offset: 3px;
+}
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.buttons button {
+  flex: 1;
+}
+label {
+  display: block;
+  margin: 14px 0 6px;
+}
+.speed {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.speed input {
+  width: 100%;
+  min-width: 40px;
+  min-height: 48px;
+}
+.speed button {
+  min-width: 54px;
+  font-size: 1.5rem;
+}
+select {
+  width: 100%;
+  background: white;
+  color: #17212b;
+}
+.check {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  min-height: 48px;
+}
+.check input {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+#status {
+  font-weight: 600;
+}
+#now {
+  background: #eef4fa;
+  border-left: 5px solid #154c79;
+  padding: 14px;
+  font-size: 1.2rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+summary {
+  padding: 15px 0;
+  cursor: pointer;
+}
+.small {
+  font-size: 0.85rem;
+}
+@media (forced-colors: active) {
+  button {
+    border: 2px solid ButtonText;
+  }
+}
