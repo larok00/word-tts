@@ -6,7 +6,8 @@ the cursor to the end. It has big Play/Pause/Stop and sentence-skip buttons, a s
 slider, keyboard shortcuts and sentence highlighting, and works with offline Windows
 voices.
 
-- **Install:** [INSTALL.md](INSTALL.md) (Part A for Koral, Part B for the friend)
+- **Install:** download `read-aloud-plus-install.zip` from the [latest release](https://github.com/larok00/word-tts/releases/latest), then follow [INSTALL.md](INSTALL.md) Part B
+- **Hosted at:** https://larok00.github.io/word-tts/ (GitHub Pages, `gh-pages` branch)
 - **Read the code:** [CODE_TOUR.md](CODE_TOUR.md)
 - **Learn Bend from it:** [LEARNING.md](LEARNING.md)
 - **Decisions & status:** [NOTES.md](NOTES.md)

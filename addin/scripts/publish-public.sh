@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Manual alternative to Pages on the private source repository.
+# Publishes the built static files (addin/dist) to a gh-pages branch, e.g. this repo (larok00/word-tts).
 # Only built static files enter the public repository; this script exports no API.
 set -euo pipefail
 

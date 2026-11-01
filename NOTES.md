@@ -164,6 +164,7 @@ Bend 2 (v2.0.39) compiles to **C (native binary), JS/.mjs**, CUDA and Metal. Ide
 | 2026-11-01 | Service worker caches app files (stale-while-revalidate, keeps current and previous cache) | Best-effort offline reopening |
 | 2026-11-01 | Install = per-user **Developer registry sideload** via `install.cmd` (no admin, no store, no account) | Simplest non-technical route on his own PC |
 | 2026-11-01 | Hosting **pending Koral's decision**: separate public repo `larok00/read-aloud-plus` + `publish-public.sh` (recommended), make `word-tts` public + Pages workflow, or paid plan | Pages on a private repo needs a paid plan. Both routes are prepared as manual-only, nothing published |
+| 2026-11-01 | **Hosting decided (Koral): repo made public, Pages served from the `gh-pages` branch** at https://larok00.github.io/word-tts. Updates via `publish-public.sh larok00/word-tts`; install zip attached to GitHub release v1.0.0 | No workflow-scope token needed. History scanned for secrets before making it public (clean; 2 early commits use the placeholder author `koral@localhost`) |
 | 2026-11-01 | New commits authored as Koral Hassan (noreply); earlier history not rewritten | Koral |
 
 ## v1 status (2026-11-01)

@@ -11,59 +11,48 @@ Assumes the friend's own Windows 10/11 PC with up-to-date Microsoft 365 Word des
 
 ---
 
-## Part A: Koral, one-time setup
+## Part A: hosting (done 2026-11-01) and updates
 
-An Office add-in is a small web page that Word shows in a side panel, so its files
-must be served over **HTTPS**. Code lives in the private repo
-`github.com/larok00/word-tts`.
+The add-in is a small web page that Word shows in a side panel, so it must be served
+over HTTPS. It's hosted on **GitHub Pages from this (public) repo**:
 
-### A1. Choose where to host the files (⚠️ your decision)
+- Live site: `https://larok00.github.io/word-tts/` (e.g. `.../taskpane.html`, `.../manifest.xml`)
+- Served from the **`gh-pages` branch** (built files only). `master` holds the source.
+- Ready-made install zip for the friend: the **GitHub release**
+  <https://github.com/larok00/word-tts/releases/latest>, file `read-aloud-plus-install.zip`.
 
-GitHub Pages can't serve a **private** repo on the free plan. Pick one:
-
-| Option | What you do | Cost | Notes |
-|---|---|---|---|
-| **1. Separate public repo (recommended)** | Create an empty **public** repo `larok00/read-aloud-plus`, then run the publish script below | Free | Only the built web files are public. The source stays private. Add-in URL: `https://larok00.github.io/read-aloud-plus` |
-| 2. Make `word-tts` public | Repo Settings → General → Change visibility → Public. Copy `hosting/pages.yml` to `.github/workflows/pages.yml` and push it (pushing a workflow needs a token with `workflow` scope, e.g. run `gh auth refresh -s workflow` first). Then go to Settings → Pages → Source: **GitHub Actions**, and run the **Deploy add-in to GitHub Pages** workflow (Actions tab → Run workflow) | Free | All code becomes public. URL: `https://larok00.github.io/word-tts` |
-| 3. GitHub Pro | Upgrade, then the same as option 2 but the repo stays private (the Pages *site* itself is still public) | Paid | |
-
-The add-in is just static files (no server, no secrets), so the published files being
-public is fine.
-
-#### Option 1 step by step
-```bash
-# on the box (or any machine with git + node), from the repo root:
-gh repo create larok00/read-aloud-plus --public --description "Read Aloud+ Word add-in (static files)"
-cd addin
-CONFIRM=yes ./scripts/publish-public.sh larok00/read-aloud-plus
-```
-Then on GitHub: `read-aloud-plus` → Settings → Pages → Source: *Deploy from a branch* →
-Branch `gh-pages` / root → Save. After about a minute,
-`https://larok00.github.io/read-aloud-plus/taskpane.html` should open in a browser.
-
-### A2. Build the install package for that URL
+### Publishing an update (no reinstall needed)
+Code changes published to the same URL are picked up the next time the panel opens
+(the service worker updates in the background, so occasionally it takes one extra reopen):
 ```bash
 cd addin
-npm ci
-BASE_URL=https://larok00.github.io/read-aloud-plus npm run build   # use your chosen URL
-npm run validate      # should say "The manifest is valid."
+BASE_URL=https://larok00.github.io/word-tts CONFIRM=yes ./scripts/publish-public.sh larok00/word-tts
 ```
-This creates `addin/dist/install/` with three files: `install.cmd`, `uninstall.cmd`
-and `manifest.xml`. Zip that folder (e.g. `ReadAloudPlus-install.zip`) and send it to
-your friend (email, USB stick, OneDrive...).
+This tests, builds and pushes `dist/` as a new commit on `gh-pages`, and Pages
+redeploys within about a minute. Only a change to the **manifest** (name, icons,
+buttons, shortcuts, permissions, URL) needs a new zip and a reinstall. Bump
+`<Version>` in `manifest.template.xml` when you do.
 
-> The manifest contains the hosting URL. If you ever change the URL, rebuild and
-> reinstall. Code updates published to the **same** URL need **no** reinstall: Word
-> picks them up the next time the panel opens.
+### Rebuilding the install zip
+```bash
+cd addin && npm ci && BASE_URL=https://larok00.github.io/word-tts npm run build && npm run validate
+# then zip the folder addin/dist/install/ (install.cmd, uninstall.cmd, manifest.xml)
+```
+
+### Alternatives (not used)
+- `hosting/pages.yml` is a manual GitHub Actions workflow that does the same as the
+  script. To use it, copy it to `.github/workflows/`, which needs a token with
+  `workflow` scope (`gh auth refresh -s workflow`), and switch Pages' source to "GitHub Actions".
+- Any other HTTPS static host works: build with that `BASE_URL`.
 
 ---
 
 ## Part B: on the friend's PC
 
 ### B1. Install
-1. Save the zip, right-click it → **Extract All…** → Extract (for example to the Desktop).
+1. Download `read-aloud-plus-install.zip` (from Koral, or from the release link above), right-click it → **Extract All…** → Extract (for example to the Desktop).
 2. **Close Word** completely.
-3. Open the extracted folder and **double-click `install.cmd`**.
+3. Open the extracted `ReadAloudPlus` folder and **double-click `install.cmd`**.
    - If Windows shows "Windows protected your PC", click **More info → Run anyway**.
      The script isn't code-signed. All it does is copy one file and add one
      per-user setting, and it doesn't need administrator rights.
