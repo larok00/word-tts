@@ -1,14 +1,19 @@
+# Executable regression examples for Splitter.split, not universal proofs.
+# Exports valid/same/check/report plus main, which prints the 27-case result.
 import Base
 import ./splitter.bend as S
 
 # Structural list recursion checks that every chunk is nonempty and bounded.
+# Bend concept: recursion consumes the list tail; +max is reused at each step.
 def valid(xs: List<&2, String>, +max: Nat) -> Bool:
   match xs:
     case Nil{}: True{}
     case +h <> t:
       Bool.not(String.is_empty(h)) && Nat.is_le(String.length(h), max) && valid(t, max)
 
-# Parallel list pattern matching compares exact expected boundaries.
+# Simultaneous list pattern matching compares exact expected boundaries.
+# Bend concept: match a b inspects both lists together; this is not a parallel
+# call. Both tails shrink, so exact comparison terminates.
 def same(a: List<&2, String>, b: List<&2, String>) -> Bool:
   match a b:
     case Nil{} Nil{}: True{}
@@ -16,11 +21,13 @@ def same(a: List<&2, String>, b: List<&2, String>) -> Bool:
     case _ _: False{}
 
 # Reusable bindings test the expected result, lossless law, and size invariants.
+# Bend concept: +chunks permits exact, lossless, and bounded checks of one result.
 def check(name: String, +text: String, +max: Nat, expected: List<&2, String>) -> Bool:
   +chunks = S.Splitter.split(text, max)
   same(chunks, expected) && String.eq(String.concat(chunks), text) && valid(chunks, max)
 
 # Boolean matching produces one readable status line and a numeric count.
+# Bend concept: do IO<Nat> sequences printing and returns the count as an effect.
 def report(name: String, ok: Bool) -> IO(Nat):
   match ok:
     case True{}:
@@ -33,6 +40,7 @@ def report(name: String, ok: Bool) -> IO(Nat):
         return 0n
 
 # IO sequencing prints all cases and sums their success counts.
+# Bend concept: typed <- binds results of IO actions; pure +passed is reusable.
 def main() -> IO(Unit):
   do IO<Unit>:
     p0 : Nat <- report("simple", check("simple", "Hello. World.", 100n, ["Hello. ", "World."]))

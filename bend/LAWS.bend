@@ -1,3 +1,7 @@
+# Specification module for the splitter; exports the open lossless claim.
+# Bend concept: a law states a type to inhabit, not an executable test.
+# {a == b : String} is an equality proposition, not a Boolean comparison.
+# for +t permits the same input in the splitter call and the equality RHS.
 import Base
 import ./splitter.bend as S
 

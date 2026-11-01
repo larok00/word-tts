@@ -38,8 +38,8 @@ Plain JavaScript Word task pane for current Microsoft 365 Word on Windows
 - The service worker caches application files and attempts an opaque office.js cache.
   Office loads additional resources; service worker availability inside Office and
   completely offline Office startup are not guaranteed. First use needs a network.
-- A content hash versions the cache. Older caches are retained for already-open
-  panes; browser/site-data cleanup removes them. Reopen the pane after deployment.
+- A content hash versions the cache. The immediately previous cache is retained for already-open
+  panes; older app caches are deleted on activation. Reopen the pane after deployment.
 - Document shortcuts require SharedRuntime 1.1 and Word 2408+. Open the pane once
   to register them. Ctrl+Alt+Shift with P/S/Right/Left/Up/Down avoids common bindings;
   Office may still prompt about conflicts with user/custom bindings.
@@ -61,3 +61,24 @@ Use a disposable document, especially for yellow-mode checks.
 
 `npm test` uses Node's runner and injected fake timers, including the existing
 splitter tests. No browser or Word desktop is available in the development container.
+
+## Manual hosting choices (nothing deployed by setup)
+
+Both routes serve the contents of `dist/` over HTTPS. Choose a route before
+building and installing a manifest; its BASE_URL must match the final location.
+
+- **Private source repository Pages:** decide whether the GitHub plan supports
+  Pages for this private repository, then enable Pages with GitHub Actions as its
+  source. Optionally set the repository variable `BASE_URL`; otherwise the manual
+  `hosting/pages.yml` uses the repository's standard Pages URL. Run it
+  through Actions → Deploy add-in to GitHub Pages → Run workflow. There is no push
+  trigger and CI uses the committed Bend module without installing Bend.
+- **Separate public hosting repository:** create `larok00/read-aloud-plus` as a
+  public repository, arrange git push authentication and a git commit identity,
+  and enable Pages from its `gh-pages` branch/root. Review
+  `scripts/publish-public.sh` before manually running
+  `CONFIRM=yes ./scripts/publish-public.sh larok00/read-aloud-plus` from `addin/`.
+  It tests/builds, prints its destination, then publishes only static output in
+  a temporary git checkout. `BASE_URL` can override the default
+  `https://larok00.github.io/read-aloud-plus`; change it when changing repositories
+  or domains. This script is never invoked by the workflow or ordinary builds.

@@ -1,0 +1,48 @@
+# Manual only: the owner must choose hosting and enable Pages for this repository.
+# A private repository may require a paid GitHub plan for Pages.
+name: Deploy add-in to GitHub Pages
+on:
+  workflow_dispatch:
+
+# The deployment job exchanges its OIDC token for a Pages deployment.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: addin/package-lock.json
+      # No Bend installation: build.mjs uses the committed splitter.bend.mjs.
+      - name: Test and build static files
+        env:
+          BASE_URL: ${{ vars.BASE_URL || format('https://{0}.github.io/{1}', github.repository_owner, github.event.repository.name) }}
+        run: |
+          cd addin
+          npm ci
+          npm test
+          npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: addin/dist
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy the uploaded static artifact
+        id: deployment
+        uses: actions/deploy-pages@v4

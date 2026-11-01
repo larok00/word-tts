@@ -1,7 +1,12 @@
+/** Word search adapter used by WordReader. Exports mapChunkToSearch; keeps escaped
+ * prefixes at 250 UTF-16 units, below Office’s 255-unit search limit.
+ */
 /** Word search accepts at most 255 characters, including escaped carets. */
-// Build a literal prefix, preserving whole words where possible and UTF-16 pairs.
+/** Build a literal prefix, preserving whole words where possible and UTF-16 pairs. */
 export function mapChunkToSearch(chunk) {
-  let text = String(chunk).replace(/[\r\n]+/g, ' ').trim();
+  let text = String(chunk)
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
   if (!text) return null;
   let prefix = '';
   for (const character of text) {

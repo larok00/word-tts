@@ -151,3 +151,43 @@ Bend 2 (v2.0.39) compiles to **C (native binary), JS/.mjs**, CUDA and Metal. Ide
 | 2026-11-01 | Use Bend 2 (2.0.39) via official installer, not Bend 1/HVM | Bend 1 install path is obsolete |
 | 2026-11-01 | Coding/install work goes through Codex (`codex exec`) | Koral's standing rule |
 | 2026-11-01 | Leaning: Office add-in + offline local voice floor (+ Piper later) | Ranks best on all 3 priorities; pending open questions |
+| 2026-11-01 | **Build an Office task-pane add-in (option A)** using the browser `speechSynthesis` (Windows voices, offline first). Piper/companion app deferred | Most reliable path with no server and no admin rights; doesn't depend on Microsoft's Read Aloud service |
+| 2026-11-01 | Assume the friend's own PC, M365 Word desktop, current build (Koral) | Allows a per-user registry sideload |
+| 2026-11-01 | Splitter written in Bend, compiled with `bend -o` and **used directly** in the add-in | Generated JS is browser-safe (no Node imports), takes about 56 ms for 20k chars, and passes all tests |
+| 2026-11-01 | JS fallback splitter is used **only** for text with lone UTF-16 surrogates | Bend `str_in` replaces them with U+FFFD, which would break the lossless law |
+| 2026-11-01 | Splitter is sequential, and parallelism is shown in `parallel_demo.bend` | Each cut depends on the text to its left. The JS target is single-core anyway |
+| 2026-11-01 | Lossless law stated in `LAWS.bend` and checked by tests and random input, but **not proven** | Proof effort time-boxed; `--verdict` needs Lean (not installed) |
+| 2026-11-01 | Plain JS ES modules, no bundler; Office.js from Microsoft CDN | Fewer moving parts = fewer breakages |
+| 2026-11-01 | Default highlight = **select** the sentence (no document change); optional yellow mode restores original colours | Never risks modifying the friend's document |
+| 2026-11-01 | Shared runtime + `ExtendedOverrides` keyboard shortcuts (Ctrl+Alt+Shift+…) | Shortcuts work while typing in the document (Word 2408+) |
+| 2026-11-01 | Watchdog + voice fallback + resume-by-restart in `player.js` | WebView2 speechSynthesis can stall or error silently |
+| 2026-11-01 | Service worker caches app files (stale-while-revalidate, keeps current and previous cache) | Best-effort offline reopening |
+| 2026-11-01 | Install = per-user **Developer registry sideload** via `install.cmd` (no admin, no store, no account) | Simplest non-technical route on his own PC |
+| 2026-11-01 | Hosting **pending Koral's decision**: separate public repo `larok00/read-aloud-plus` + `publish-public.sh` (recommended), make `word-tts` public + Pages workflow, or paid plan | Pages on a private repo needs a paid plan. Both routes are prepared as manual-only, nothing published |
+| 2026-11-01 | New commits authored as Koral Hassan (noreply); earlier history not rewritten | Koral |
+
+## v1 status (2026-11-01)
+- Linux-verified: Bend tests 27/27, `parallel_demo` matches sequential, JS tests 61/61,
+  build OK, `office-addin-manifest validate` OK, regenerated Bend JS identical.
+- **Windows-only, untested:** real speech in WebView2, ribbon button, shortcuts,
+  highlighting and restore in a real doc, install.cmd, offline reopen, whether Windows 11
+  "natural" voices appear. See the checklist in INSTALL.md.
+- Known limits: highlighting a chunk longer than 250 chars selects only its first
+  250 chars (Word `search` limit). Shortcuts only work after the add-in has loaded
+  once per Word session. The first load needs the network.
+
+## Codex usage and credits
+- Codex CLI 0.166.0, ChatGPT **Plus**. Steps used about 17.6k (setup), 57.7k, 77.4k and
+  91.3k tokens. After step 03 the 5-hour window was at about 40% and the weekly
+  window at about 22%. **No limit messages; purchased-credit balance unchanged**
+  (read from the `rate_limits` event in `~/.codex/sessions/*.jsonl`).
+- **There is no Codex setting that stops it spending purchased credits** (as of
+  Oct 2026; see openai/codex issue #28382). When the included 5h or weekly allowance
+  runs out, it draws from the credit balance automatically, even partway through a task.
+  Turning off auto-reload (ChatGPT Settings → Usage, or Codex Usage & Billing) only
+  stops *new purchases*; the existing balance can still be spent. The only hard
+  guarantee is a zero balance. **Account settings were not changed.**
+- Mitigation used here: `/workspace/codex-guard.sh` polls the latest session's
+  `rate_limits` every 10 s and kills `codex` if the credit balance changes, a limit is
+  reached, or the 5h window reaches 90% (weekly 95%). `/status` in the interactive CLI
+  shows the same numbers.
