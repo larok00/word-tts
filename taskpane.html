@@ -6,9 +6,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Word Read Aloud+</title>
-    <link rel="stylesheet" href="taskpane.css?v=1.0.3" />
+    <link rel="stylesheet" href="taskpane.css?v=1.0.4" />
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-    <script type="module" src="taskpane.js?v=1.0.3"></script>
+    <script type="module" src="taskpane.js?v=1.0.4"></script>
   </head>
   <body>
     <main>
@@ -62,11 +62,14 @@
         Offline voices work without a speech service. The first visit needs a network connection to
         load this add-in and Office.
       </p>
-      <details class="small">
+      <details class="small" id="diagnosticsPanel">
         <summary>Diagnostics</summary>
-        <p id="diagnostics">Version 1.0.3; start: not read yet</p>
+        <p id="diagnostics">Version 1.0.4; start: not read yet</p>
+        <button id="copyLog" type="button">Copy log</button>
+        <span id="copyResult" role="status"></span>
+        <pre id="eventLog" style="white-space: pre-wrap; overflow-wrap: anywhere"></pre>
       </details>
-      <footer id="version" class="small">Read Aloud+ v1.0.3</footer>
+      <footer id="version" class="small">Read Aloud+ v1.0.4</footer>
     </main>
   </body>
 </html>

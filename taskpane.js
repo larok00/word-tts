@@ -1,12 +1,13 @@
 /** UI glue: connects DOM controls, Office lifecycle, WordReader, and Player.
  * No exports; loading this module registers pane controls and document shortcuts.
  */
-import { VERSION } from './lib/version.js?v=1.0.3';
-import { Player } from './lib/player.js?v=1.0.3';
-import { splitSentences } from './lib/splitter.js?v=1.0.3';
-import { filterVoices, pickDefault, buildFallbackOrder } from './lib/voices.js?v=1.0.3';
-import { loadSettings, saveSettings, normalizeRate } from './lib/settings.js?v=1.0.3';
-import { WordReader } from './word.js?v=1.0.3';
+import { EventLog, copyLog } from './lib/event-log.js?v=1.0.4';
+import { VERSION } from './lib/version.js?v=1.0.4';
+import { Player } from './lib/player.js?v=1.0.4';
+import { sentenceChunks } from './lib/splitter.js?v=1.0.4';
+import { filterVoices, pickDefault, buildFallbackOrder } from './lib/voices.js?v=1.0.4';
+import { loadSettings, saveSettings, normalizeRate } from './lib/settings.js?v=1.0.4';
+import { WordReader } from './word.js?v=1.0.4';
 // Register document shortcuts before settings, voices, or asynchronous setup can fail.
 if (window.Office)
   Office.onReady(() => {
@@ -23,7 +24,7 @@ if (window.Office)
         for (const [name, action] of Object.entries(actions)) {
           Office.actions.associate(name, async () => {
             try {
-              await action();
+              await command(name, 'shortcut', action);
             } catch {
               status('Please try that control again.');
             }
@@ -56,6 +57,10 @@ for (const id of [
   'now',
   'version',
   'diagnostics',
+  'diagnosticsPanel',
+  'eventLog',
+  'copyLog',
+  'copyResult',
 ]) {
   elements[id] = document.getElementById(id);
 }
@@ -68,12 +73,26 @@ try {
 const settings = loadSettings(storage);
 const synth = window.speechSynthesis;
 const reader = new WordReader();
+const log = new EventLog({ onChange: renderLog });
+reader.onEvent = (event) => log.add(event);
+/** Hidden Diagnostics costs no DOM updates. */
+function renderLog() {
+  if (elements.diagnosticsPanel.open) elements.eventLog.textContent = log.text();
+}
+elements.diagnosticsPanel.addEventListener('toggle', renderLog);
+elements.copyLog.addEventListener('click', async () => {
+  try {
+    diagnostics();
+    await copyLog(elements.diagnostics.textContent + '\n' + log.text(), navigator, document);
+    elements.copyResult.textContent = 'Copied';
+  } catch (error) { elements.copyResult.textContent = error.message || String(error); }
+});
 elements.version.textContent = `Read Aloud+ v${VERSION}`;
 /** Keep the last read decision available without exposing document text. */
 function diagnostics() {
   elements.diagnostics.textContent = `Version ${VERSION}; start: ${reader.lastStartMethod || 'not read yet'}`
     + (reader.lastStartError ? `; error: ${reader.lastStartError}` : '')
-    + (reader.lastHighlight ? `; highlight: ${reader.lastHighlight.index + 1} ${reader.lastHighlight.method}`
+    + (reader.lastHighlight ? `; highlight chunk: ${reader.lastHighlight.index + 1} ${reader.lastHighlight.method}`
       + (reader.lastHighlight.error ? ` (${reader.lastHighlight.error})` : '') : '');
 }
 diagnostics();
@@ -81,8 +100,10 @@ let voices = [];
 let ready = false;
 let loading = false;
 let playRequest = 0;
+let sentenceTexts = [];
 /** Show friendly text without ever interpreting document text as HTML. */
 function status(message) {
+  if (elements.status.textContent !== message) log.add(`status ${message}`);
   elements.status.textContent = message;
 }
 // Adapt browser utterances to the small injected engine interface.
@@ -94,24 +115,33 @@ const engine = {
     const utterance = new SpeechSynthesisUtterance(options.text);
     utterance.rate = options.rate;
     utterance.voice = options.voice;
-    utterance.onstart = options.onstart;
+    const sentence = player.sentenceIndex() + 1;
+    const chunk = player.index + 1;
+    const event = (name, callback) => (value) => {
+      log.add(`utterance ${name} sentence=${sentence} chunk=${chunk}${value?.error ? ' error=' + value.error : ''}`);
+      callback(value);
+    };
+    utterance.onstart = event('start', options.onstart);
     utterance.onboundary = options.onboundary;
-    utterance.onend = options.onend;
-    utterance.onerror = options.onerror;
+    utterance.onend = event('end', options.onend);
+    utterance.onerror = event('error', options.onerror);
     this.current = utterance;
     synth.speak(utterance);
   },
   /** Cancel before every new utterance, including retry and navigation. */
   cancel() {
+    log.add('utterance cancel');
     synth?.cancel();
     this.current = null;
   },
   /** Native pause retains position when WebView2 cooperates. */
   pause() {
+    log.add('utterance pause');
     synth?.pause();
   },
   /** Player handles a stalled resume with a timed restart. */
   resume() {
+    log.add('utterance resume');
     synth?.resume();
   },
 };
@@ -120,8 +150,8 @@ const player = new Player({
   onInvalidate: () => reader.invalidate(),
   /** Word requests are deliberately not awaited by speech callbacks. */
   onChunkStart(index) {
-    elements.now.textContent = player.chunks[index];
-    status(`Reading sentence ${index + 1} of ${player.chunks.length}`);
+    elements.now.textContent = sentenceTexts[player.sentenceIndex(index)] || player.chunks[index];
+    status(`Reading sentence ${player.sentenceIndex(index) + 1} of ${player.sentenceCount}`);
     void Promise.resolve(reader.highlight(index, player.chunks[index], settings.highlight)).then(diagnostics);
   },
   /** Keep controls and temporary document formatting consistent with player state. */
@@ -129,7 +159,7 @@ const player = new Player({
     elements.pause.disabled = !['playing', 'paused'].includes(state);
     elements.pause.textContent = state === 'paused' ? '▶ Resume' : '⏸ Pause';
     if (state === 'playing')
-      status(`Reading sentence ${player.index + 1} of ${player.chunks.length}`);
+      status(`Reading sentence ${player.sentenceIndex() + 1} of ${player.sentenceCount}`);
     if (state === 'paused') status('Paused. Press Resume to continue.');
     if (state === 'finished') {
       status('Finished reading.');
@@ -212,9 +242,12 @@ async function play() {
       void reader.cleanup();
       return;
     }
-    const chunks = splitSentences(text, 300);
+    const content = sentenceChunks(text, 300);
+    const { chunks, sentenceNumbers } = content;
+    sentenceTexts = content.sentenceTexts;
     reader.chunks = chunks;
-    player.setChunks(chunks);
+    reader.sentenceNumbers = sentenceNumbers;
+    player.setChunks(chunks, sentenceNumbers);
     updateFallback();
     player.play();
     if (!chunks.length)
@@ -230,7 +263,7 @@ async function play() {
 function toggle() {
   if (player.state === 'playing') player.pause();
   else if (player.state === 'paused') player.resume();
-  else void play();
+  else return play();
 }
 /** Invalidate a pending document read as well as any pending speech callbacks. */
 function stop() {
@@ -238,14 +271,25 @@ function stop() {
   player.stop();
   void reader.cleanup();
 }
-elements.play.addEventListener('click', play);
-elements.pause.addEventListener('click', toggle);
-elements.stop.addEventListener('click', stop);
-elements.previous.addEventListener('click', () => player.previous());
-elements.next.addEventListener('click', () => player.next());
-elements.slower.addEventListener('click', () => changeRate(settings.rate - 0.1));
-elements.faster.addEventListener('click', () => changeRate(settings.rate + 0.1));
-elements.rate.addEventListener('input', () => changeRate(Number(elements.rate.value)));
+/** Log both sides of every command, including asynchronous document reads. */
+async function command(name, source, action) {
+  name = ({ Previous: 'prev', Next: 'next', Stop: 'stop', SpeedUp: 'speed up', SpeedDown: 'speed down' })[name] || name;
+  if (name === 'TogglePlayPause') name = player.state === 'playing' ? 'pause' : player.state === 'paused' ? 'resume' : 'play';
+  const before = player.sentenceIndex() + 1;
+  log.add(`command ${name} source=${source} before=${before}`);
+  try {
+    const result = action();
+    return result?.then ? await result : result;
+  }
+  finally { log.add(`command ${name} source=${source} before=${before} after=${player.sentenceIndex() + 1}`); }
+}
+for (const [id, name, action] of [
+  ['play', 'play', play], ['pause', 'TogglePlayPause', toggle], ['stop', 'stop', stop],
+  ['previous', 'prev', () => player.previous()], ['next', 'next', () => player.next()],
+  ['slower', 'speed down', () => changeRate(settings.rate - 0.1)],
+  ['faster', 'speed up', () => changeRate(settings.rate + 0.1)],
+]) elements[id].addEventListener('click', () => command(name, 'button', action));
+elements.rate.addEventListener('input', () => command('speed', 'button', () => changeRate(Number(elements.rate.value))));
 elements.voice.addEventListener('change', () => {
   settings.voiceURI = elements.voice.value;
   updateFallback();
@@ -265,7 +309,7 @@ elements.yellow.addEventListener('change', () => {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     event.preventDefault();
-    stop();
+    void command('stop', 'shortcut', stop);
     return;
   }
   if (
@@ -284,7 +328,8 @@ document.addEventListener('keydown', (event) => {
   };
   if (actions[event.key]) {
     event.preventDefault();
-    actions[event.key]();
+    const names = { ' ': 'TogglePlayPause', ArrowLeft: 'prev', ArrowRight: 'next', '+': 'speed up', '-': 'speed down' };
+    void command(names[event.key], 'shortcut', actions[event.key]);
   }
 });
 if (window.Office) Office.onReady(() => { ready = true; });
