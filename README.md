@@ -2,7 +2,8 @@
 
 A dependable text-to-speech reader for **Word desktop on Windows**, built as a backup
 for Word's own Read Aloud. It's a task-pane add-in that reads the selection, or from
-the cursor to the end. It has big Play/Pause/Stop and sentence-skip buttons, a speed
+the beginning of the sentence containing the cursor to the end. It has big
+Play/Pause/Stop and sentence-skip buttons, a speed
 slider, keyboard shortcuts and sentence highlighting, and works with offline Windows
 voices.
 
@@ -25,3 +26,7 @@ bend bend/splitter_test.bend          # 27 passed, 0 failed
 cd addin && npm ci && npm test && npm run build && npm run validate
 ```
 Tooling: Bend 2.0.39, Node 22, Codex CLI 0.166.0.
+
+Document shortcuts (open the pane once per Word session): **Ctrl+Alt+Shift** with
+**P** to play/pause, **X** to stop, **Right/Left** for next/previous sentence, and
+**Up/Down** for faster/slower. Stop uses X because S opens Word’s Styles pane.

@@ -1,6 +1,7 @@
 /** Word API boundary. Exports WordReader; speech never waits for its serialized
  * highlight queue. Tracked ranges remain valid across separate Word.run batches.
  */
+import { sentenceStartOffset } from './lib/sentence-start.js';
 import { mapChunkToSearch } from './lib/mapping.js';
 export class WordReader {
   /** Keep document state separate from the speech session. */
@@ -32,12 +33,45 @@ export class WordReader {
       this.reading =
         selection.text.length > 0
           ? selection.getRange()
-          : selection.getRange('Start').expandTo(context.document.body.getRange('End'));
+          : (await this.sentenceStart(context, selection)).expandTo(context.document.body.getRange('End'));
       this.reading.track();
       this.reading.load('text');
       await context.sync();
       return this.reading.text;
     });
+  }
+  /** Resolve within the paragraph; unsupported Word operations retain cursor reading. */
+  async sentenceStart(context, selection) {
+    const cursor = selection.getRange('Start');
+    try {
+      const paragraph = selection.paragraphs.getFirst();
+      const start = paragraph.getRange('Start');
+      const prefix = start.expandTo(cursor);
+      prefix.load('text');
+      await context.sync();
+      const offset = sentenceStartOffset(prefix.text);
+      if (!offset) return start;
+      if (offset === prefix.text.length) return cursor;
+      // Search the end of the preceding text, keeping below Word's search limit.
+      const before = prefix.text.slice(0, offset);
+      const matches = prefix.search(before.slice(-100).replaceAll('^', '^^'), {
+        matchCase: true, matchWildcards: false,
+      });
+      matches.load('items');
+      await context.sync();
+      const candidates = matches.items.map((match) => ({
+        end: match.getRange('End'),
+        prefix: start.expandTo(match.getRange('End')),
+      }));
+      for (const candidate of candidates) candidate.prefix.load('text');
+      await context.sync();
+      // Repeated text must resolve to this exact offset, never a later occurrence.
+      const found = candidates.find((candidate) => candidate.prefix.text.length === offset);
+      if (found) return found.end;
+    } catch {
+      /* Cursor-to-end remains available on API or search failure. */
+    }
+    return cursor;
   }
   /** Restore temporary formatting before applying the next highlight. */
   async restoreYellow(context) {

@@ -41,7 +41,7 @@ Plain JavaScript Word task pane for current Microsoft 365 Word on Windows
 - A content hash versions the cache. The immediately previous cache is retained for already-open
   panes; older app caches are deleted on activation. Reopen the pane after deployment.
 - Document shortcuts require SharedRuntime 1.1 and Word 2408+. Open the pane once
-  to register them. Ctrl+Alt+Shift with P/S/Right/Left/Up/Down avoids common bindings;
+  to register them. Ctrl+Alt+Shift with P/X/Right/Left/Up/Down avoids common bindings;
   Office may still prompt about conflicts with user/custom bindings.
 
 ## Windows acceptance checks

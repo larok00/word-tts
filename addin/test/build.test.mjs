@@ -4,11 +4,12 @@
 /** Build in a subprocess and inspect the actual deployment package. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { readFile, access } from 'node:fs/promises';
 const root = new URL('../', import.meta.url);
 test('build substitutes deployment URL and copies all HTML references', async () => {
-  execFileSync(process.execPath, ['scripts/build.mjs'], {
+  await promisify(execFile)(process.execPath, ['scripts/build.mjs'], {
     cwd: root,
     env: { ...process.env, BASE_URL: 'https://example.github.io/word-tts' },
   });
@@ -79,5 +80,27 @@ test('activation retains current and newest previous app cache only', async () =
       deleted,
       names.includes('read-aloud-plus-z-old') ? ['read-aloud-plus-z-old'] : [],
     );
+  }
+});
+
+test('shortcut package avoids known Word bindings and registers every action', async () => {
+  const shortcuts = JSON.parse(await readFile(new URL('dist/shortcuts.json', root), 'utf8'));
+  const keys = shortcuts.shortcuts.map((shortcut) => shortcut.key.default);
+  assert.equal(new Set(keys).size, keys.length);
+  const reserved = ['Ctrl+Alt+Shift+S', 'Ctrl+Alt+Shift+M', 'Ctrl+Alt+Shift+C', 'Ctrl+Alt+Shift+V'];
+  for (const key of keys) assert.ok(!reserved.includes(key));
+  const source = await readFile(new URL('src/taskpane.js', root), 'utf8');
+  for (const action of shortcuts.actions) {
+    assert.equal(action.type, 'ExecuteFunction');
+    assert.ok(action.name);
+    assert.ok(source.includes(action.id + ':'));
+    assert.equal(shortcuts.shortcuts.filter((s) => s.action === action.id).length, 1);
+  }
+  const manifest = await readFile(new URL('dist/manifest.xml', root), 'utf8');
+  assert.ok(manifest.includes('<Version>1.0.1.0</Version>'));
+  assert.ok(manifest.includes('<AppDomain>https://example.github.io</AppDomain>'));
+  assert.ok(manifest.includes('/assets/icon-64.png'));
+  for (const match of manifest.matchAll(/https:\/\/example.github.io\/word-tts\/([^"<]+)/g)) {
+    await access(new URL('dist/' + match[1], root));
   }
 });

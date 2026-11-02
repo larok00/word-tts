@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { homedir } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const base = (process.env.BASE_URL || 'https://localhost:3000').replace(/\/+$/, '');
@@ -14,11 +14,24 @@ if (parsed.protocol !== 'https:' || parsed.search || parsed.hash)
   throw new Error('BASE_URL must be an HTTPS URL without query or fragment.');
 // Try PATH first, then the standard user installation. CI uses the committed output.
 const bendArguments = ['../bend/splitter.bend', '-o', 'src/lib/splitter.bend.mjs'];
+/** Use asynchronous pipes so restricted hosts can launch the compiler too. */
+function compile(command) {
+  return new Promise((resolve) => {
+    let stderr = '';
+    const child = spawn(command, bendArguments, { cwd: root });
+    child.stdout.resume();
+    child.stderr.on('data', (data) => {
+      stderr += data;
+    });
+    child.on('error', (error) => resolve({ error, stderr }));
+    child.on('close', (status) => resolve({ status, stderr }));
+  });
+}
 let bendPath = 'bend';
-let bend = spawnSync(bendPath, bendArguments, { cwd: root, encoding: 'utf8' });
+let bend = await compile(bendPath);
 if (bend.error?.code === 'ENOENT') {
   bendPath = path.join(homedir(), '.bend/bin/bend');
-  bend = spawnSync(bendPath, bendArguments, { cwd: root, encoding: 'utf8' });
+  bend = await compile(bendPath);
 }
 if (bend.error?.code === 'ENOENT') {
   console.log('Bend not found on PATH or in $HOME/.bend/bin; using committed splitter.');
@@ -38,14 +51,13 @@ function escapeXml(value) {
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;');
 }
-const manifest = (await readFile(path.join(root, 'manifest.template.xml'), 'utf8')).replaceAll(
-  '{{BASE_URL}}',
-  escapeXml(base),
-);
+const manifest = (await readFile(path.join(root, 'manifest.template.xml'), 'utf8'))
+  .replaceAll('{{BASE_URL}}', escapeXml(base))
+  .replaceAll('{{ORIGIN}}', escapeXml(parsed.origin));
 await writeFile(path.join(root, 'dist/manifest.xml'), manifest);
 const definitions = [
   ['TogglePlayPause', 'Play or pause', 'P'],
-  ['Stop', 'Stop reading', 'S'],
+  ['Stop', 'Stop reading', 'X'],
   ['Next', 'Next sentence', 'Right'],
   ['Previous', 'Previous sentence', 'Left'],
   ['SpeedUp', 'Increase speed', 'Up'],

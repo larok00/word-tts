@@ -84,6 +84,8 @@ const player = new Player({
   onStateChange(state) {
     elements.pause.disabled = !['playing', 'paused'].includes(state);
     elements.pause.textContent = state === 'paused' ? '▶ Resume' : '⏸ Pause';
+    if (state === 'playing')
+      status(`Reading sentence ${player.index + 1} of ${player.chunks.length}`);
     if (state === 'paused') status('Paused. Press Resume to continue.');
     if (state === 'finished') {
       status('Finished reading.');

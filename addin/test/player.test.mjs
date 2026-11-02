@@ -199,3 +199,25 @@ test('resume after voice exhaustion retries the chosen voice', () => {
   assert.equal(f.player.state, 'playing');
   assert.equal(f.current().voice.voiceURI, 'a');
 });
+
+for (const paused of [false, true]) {
+  test(`repeated navigation moves one sentence with paused=${paused}`, () => {
+    const f = fixture({ chunks: ['One.', 'Two.', 'Three.', 'Four.'] });
+    f.player.play(3);
+    for (const expected of [2, 1, 0, 0]) {
+      if (paused) f.player.pause();
+      const old = f.current();
+      f.player.previous();
+      old.onend();
+      assert.equal(f.player.index, expected);
+      assert.equal(f.current().text, f.player.chunks[expected]);
+    }
+    for (const expected of [1, 2, 3, 3]) {
+      if (paused) f.player.pause();
+      const old = f.current();
+      f.player.next();
+      old.onend();
+      assert.equal(f.player.index, expected);
+    }
+  });
+}

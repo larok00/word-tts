@@ -192,3 +192,61 @@ Bend 2 (v2.0.39) compiles to **C (native binary), JS/.mjs**, CUDA and Metal. Ide
   `rate_limits` every 10 s and kills `codex` if the credit balance changes, a limit is
   reached, or the 5h window reaches 90% (weekly 95%). `/status` in the interactive CLI
   shows the same numbers.
+
+## Windows test round 2 (2026-11-01)
+
+Real Microsoft 365 Word for Windows test results and fixes (implemented 2026-11-02):
+
+- **Stop shortcut clash:** Word’s Styles pane owns Ctrl+Alt+Shift+S. Stop now uses
+  **Ctrl+Alt+Shift+X** (exit reading). Reviewed the other five combinations from
+  existing Word shortcut knowledge, without network lookup: P and Right/Left/Up/Down
+  have no known built-in clash with all three modifiers, so they stay. User or
+  other add-in assignments can still differ. A package test rejects duplicates and
+  the known Word combinations S/M/C/V with these modifiers. Help and install docs agree.
+- **Play mid-sentence:** caret-to-end used to start with the remainder of the word.
+  A pure JS helper now finds the containing sentence through the existing
+  `splitSentences` entry point (compiled Bend, with its existing plain-JS fallback).
+  It appends a sentinel to expose a completed boundary at the cursor and disables
+  speech-length chunking. Word reads the paragraph prefix, locates the exact offset
+  using a short literal search, and expands from there to the body end. Matching
+  prefix lengths disambiguates repeated text. API/search failures retain the old
+  cursor-start behavior; selected text and the original selection bookmark stay intact.
+- **Stale Paused status:** the playing-state observer now immediately displays
+  “Reading sentence N of M”, including native Resume before another sentence starts.
+- **Resource-load toast:** successful HTTP responses did not rule out manifest
+  metadata problems. Changed HighResolutionIconUrl from the 128px asset to the
+  existing **64px** asset, and AppDomain from a deployment path to the HTTPS origin.
+  These are the likely causes; the Windows toast still needs a real reinstall/retest
+  to confirm. Manifest version is now **1.0.1.0**. Reviewed ExtendedOverrides JSON:
+  actions already have id/type/name and shortcuts have action/key.default. All six
+  action IDs have Office.actions.associate handlers on Office readiness. FunctionFile
+  and the long-lived Runtime both resolve to Taskpane.Url. Package tests verify
+  referenced local resources are built, and all shortcut action IDs are registered.
+- **Previous/Next:** the player already uses the current index minus/plus one and
+  clamps at the ends. Added repeated presses while playing and paused, including
+  late completion callbacks from canceled speech; no player behavior change needed.
+
+**Windows passes:** reading and selection follow; offline voices listed;
+Pause/Resume; speed; Stop; yellow highlight restores; close/reopen.
+
+**Windows test setup lessons:** Codex on Windows runs sandboxed: registry/file
+installs it performs do not reach the real system. The install had to be redone
+from outside the sandbox. Word started through COM automation
+(`/Automation -Embedding`) does not load add-ins; start Word normally for tests.
+
+**Usage limit:** during this Windows test Codex kept spending purchased credits
+past its 5-hour limit (about 44 credits during the test, about 8 more afterwards).
+Long Windows runs must stop at the limit; do not assume a limit message stops work.
+
+**Local verification (2026-11-02):** 76 JS tests pass, including sentence offsets,
+Word range mocks, immediate Resume status, shortcut/resource packaging, and repeated
+navigation. `npm test` and `npm run build` pass. This host blocks Node synchronous
+child processes with EPERM, so the build/compiler and build test now use asynchronous
+child processes. The detailed test count was obtained with Node’s
+`--test-isolation=none` (the default reporter here counts the nine test files).
+Bend splitter tests: 27 passed, 0 failed; splitter check passes; parallel demo prints
+8 and matches sequential; hello runs. LAWS.bend still reports its expected
+`SOME PROOFS FAIL / 1 TODO` (exit 1), not a proven law. No Bend source changed;
+the build regenerated identical compiled JS. `npm run validate` was attempted,
+but this installed XML validator requires Microsoft’s online validation service
+and cannot pass offline (DNS EAI_AGAIN); no successful schema validation is claimed.

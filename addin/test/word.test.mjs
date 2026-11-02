@@ -21,6 +21,11 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
       this.end = end;
       this.context = context;
     }
+    /** Locate the paragraph containing this range's start. */
+    get paragraphs() {
+      return { getFirst: () => new Range(text.lastIndexOf('\n', this.start - 1) + 1,
+        text.indexOf('\n', this.start) < 0 ? text.length : text.indexOf('\n', this.start)) };
+    }
     // Word exposes loaded text after sync; this model supplies it immediately.
     get text() {
       return text.slice(this.start, this.end);
@@ -57,12 +62,14 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
       assert.equal(options.matchCase, true);
       searches++;
       const needle = query.replaceAll('^^', '^');
-      const position = text.indexOf(needle, this.start);
+      const items = [];
+      for (let position = text.indexOf(needle, this.start);
+        position >= 0 && position + needle.length <= this.end;
+        position = text.indexOf(needle, position + Math.max(1, needle.length))) {
+        items.push(new Range(position, position + needle.length));
+      }
       return {
-        items:
-          position >= 0 && position + needle.length <= this.end
-            ? [new Range(position, position + needle.length)]
-            : [],
+        items,
         /** Word load queues properties; this fake already has their values. */
         load() {},
       };
@@ -154,4 +161,37 @@ test('stale queued requests are discarded and errors leave the queue usable', as
   });
   await reader.cleanup();
   assert.equal(f.tracked.size, 0);
+});
+
+test('caret reading starts at its sentence, retaining the original caret bookmark', async () => {
+  for (const [text, caret, expected] of [
+    ['First. Ravens in between.', 11, 'Ravens in between.'],
+    ['First sentence.', 4, 'First sentence.'],
+    ['First. Next.', 7, 'Next.'],
+    ['Same. Same. Same.', 14, 'Same.'],
+    ['Heading\nFirst. Second sentence.', 22, 'Second sentence.'],
+    ['First. Use e.g. examples here.', 22, 'Use e.g. examples here.'],
+  ]) {
+    const f = documentFixture(text, caret, caret);
+    const reader = new WordReader();
+    assert.equal(await reader.read(), expected);
+    await reader.cleanup();
+    assert.deepEqual(f.selections.at(-1), [caret, caret]);
+    assert.equal(f.tracked.size, 0);
+  }
+});
+test('paragraph API failure falls back to the caret', async () => {
+  documentFixture('First. Second.', 10, 10);
+  const reader = new WordReader();
+  const run = Word.run;
+  Word.run = (callback) => run((context) => {
+    const select = context.document.getSelection;
+    context.document.getSelection = () => {
+      const range = select();
+      Object.defineProperty(range, 'paragraphs', { get() { throw Error('unsupported'); } });
+      return range;
+    };
+    return callback(context);
+  });
+  assert.equal(await reader.read(), 'ond.');
 });

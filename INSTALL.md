@@ -66,7 +66,8 @@ cd addin && npm ci && BASE_URL=https://larok00.github.io/word-tts npm run build 
 
 ### B2. Use it
 - Select some text, or just click where you want to start, then press **▶ Play**.
-  With nothing selected, it reads from the cursor to the end of the document.
+  With nothing selected, it reads from the beginning of the sentence containing
+  the cursor to the end of the document.
 - **Pause/Resume**, **Stop**, **◀ Previous** / **Next ▶** sentence.
 - **Speed**: slider or the big **−** / **+** buttons. Speed and voice are remembered.
 - The sentence being read is selected in the document, so it's easy to follow. Tick
@@ -75,7 +76,7 @@ cd addin && npm ci && BASE_URL=https://larok00.github.io/word-tts npm run build 
 - **Keyboard shortcuts**, which work while typing in the document (after the panel
   has been opened once in that Word session):
   - Ctrl+Alt+Shift+P: play / pause
-  - Ctrl+Alt+Shift+S: stop
+  - Ctrl+Alt+Shift+X: stop
   - Ctrl+Alt+Shift+→ / ←: next / previous sentence
   - Ctrl+Alt+Shift+↑ / ↓: faster / slower
   - When the panel itself has focus: Space, Esc, ← →, + −.
@@ -106,6 +107,9 @@ Close Word, double-click `uninstall.cmd` from the same folder.
 ## What's only verifiable on Windows (Koral's test checklist)
 Everything in `addin/` has unit tests, builds and validates on Linux, but these need
 a real Windows + Word session:
+- Run the installer outside Codex’s Windows sandbox: registry/file installs inside
+  that sandbox do not reach the real system; the test install had to be redone outside.
+- Start Word normally. COM automation (`/Automation -Embedding`) does not load add-ins.
 - [ ] Install via `install.cmd`; the Home-tab button appears.
 - [ ] Voices list shows Windows voices marked (offline); Play speaks.
 - [ ] Pause/Resume/Stop/Prev/Next and the speed controls work while speaking.
