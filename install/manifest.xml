@@ -7,7 +7,7 @@
   xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
   xsi:type="TaskPaneApp">
   <Id>cf7ed621-a0dd-48da-a316-9d2a576e8185</Id>
-  <Version>1.0.1.0</Version>
+  <Version>1.0.2.0</Version>
   <ProviderName>Koral</ProviderName>
   <DefaultLocale>en-GB</DefaultLocale>
   <DisplayName DefaultValue="Read Aloud+"/>
@@ -28,7 +28,7 @@
     </Sets>
   </Requirements>
   <DefaultSettings>
-    <SourceLocation DefaultValue="https://larok00.github.io/word-tts/taskpane.html"/>
+    <SourceLocation DefaultValue="https://larok00.github.io/word-tts/taskpane.html?v=1.0.2"/>
   </DefaultSettings>
   <Permissions>ReadWriteDocument</Permissions>
   <VersionOverrides
@@ -83,7 +83,7 @@
         <bt:Image id="Icon.80" DefaultValue="https://larok00.github.io/word-tts/assets/icon-80.png"/>
       </bt:Images>
       <bt:Urls>
-        <bt:Url id="Taskpane.Url" DefaultValue="https://larok00.github.io/word-tts/taskpane.html"/>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://larok00.github.io/word-tts/taskpane.html?v=1.0.2"/>
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="Group.Label" DefaultValue="Read Aloud+"/>

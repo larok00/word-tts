@@ -5,15 +5,15 @@
  * Office.js loads more resources itself; opaque CDN caching cannot guarantee Office
  * startup offline. Never fail installation merely because the CDN is unavailable.
  */
-const CACHE = 'read-aloud-plus-928299cd2c57c527';
-const FILES = ["./assets/icon-128.png", "./assets/icon-16.png", "./assets/icon-32.png", "./assets/icon-64.png", "./assets/icon-80.png", "./help.html", "./lib/mapping.js", "./lib/player.js", "./lib/sentence-start.js", "./lib/settings.js", "./lib/splitter-fallback.js", "./lib/splitter.bend.mjs", "./lib/splitter.js", "./lib/voices.js", "./manifest.xml", "./shortcuts.json", "./taskpane.css", "./taskpane.html", "./taskpane.js", "./word.js"];
+const CACHE = 'read-aloud-plus-625f17b194370f6e';
+const FILES = ["./assets/icon-128.png", "./assets/icon-16.png", "./assets/icon-32.png", "./assets/icon-64.png", "./assets/icon-80.png", "./help.html", "./lib/mapping.js", "./lib/player.js", "./lib/sentence-start.js", "./lib/settings.js", "./lib/splitter-fallback.js", "./lib/splitter.bend.mjs", "./lib/splitter.js", "./lib/version.js", "./lib/voices.js", "./manifest.xml", "./shortcuts.json", "./taskpane.css", "./taskpane.html", "./taskpane.js", "./word.js"];
 const OFFICE = 'https://appsforoffice.microsoft.com/lib/1/hosted/office.js';
 // Cache the local application atomically; the optional opaque CDN response separately.
 self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
       const cache = await caches.open(CACHE);
-      await cache.addAll(FILES);
+      await cache.addAll(FILES.map((url) => new Request(url, { cache: 'reload' })));
       try {
         const response = await fetch(OFFICE, { mode: 'no-cors' });
         await cache.put(OFFICE, response);
@@ -41,18 +41,37 @@ self.addEventListener('activate', (event) => {
     })(),
   );
 });
-// Return cached content immediately and refresh it when the network works.
+/** Bound network waiting while allowing a late response to refresh the offline copy. */
+async function networkFirst(request, event) {
+  const cache = await caches.open(CACHE);
+  const local = new URL(request.url).origin === self.location.origin;
+  const update = (async () => {
+    const response = await fetch(request, local ? { cache: 'no-cache' } : {});
+    if (!response.ok && response.type !== 'opaque') throw new Error('Network response failed');
+    await cache.put(request, response.clone());
+    return response;
+  })();
+  event.waitUntil(update.catch(() => {}));
+  let timer;
+  try {
+    return await Promise.race([
+      update,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Network timed out')), 3000);
+      }),
+    ]);
+  } catch (error) {
+    // Versioned pane and asset URLs share their precached offline copy.
+    const cached = await cache.match(request, { ignoreSearch: local });
+    if (cached) return cached;
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin && event.request.url !== OFFICE) return;
-  const update = caches.open(CACHE).then(async (cache) => {
-    const response = await fetch(event.request);
-    if (response.ok || response.type === 'opaque') await cache.put(event.request, response.clone());
-    return response;
-  });
-  event.waitUntil(update.catch(() => {}));
-  event.respondWith(
-    caches.open(CACHE).then(async (cache) => (await cache.match(event.request)) || update),
-  );
+  event.respondWith(networkFirst(event.request, event));
 });
