@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { WordReader } from '../src/word.js';
 /** Emulate context ownership and literal range search without importing Office. */
-function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = null) {
+function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = null, searchFilter = () => true) {
   const selections = [];
   const colors = new Map();
   const context = { sync: async () => {} };
@@ -55,13 +55,15 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
     }
     /** Record user-visible document selection changes. */
     select() {
-      selections.push([this.start, this.end]);
+      if (context.select) context.select([this.start, this.end]);
+      else selections.push([this.start, this.end]);
     }
     /** Simulate literal caret escaping and the first matching range. */
     search(query, options) {
       assert.equal(options.matchCase, true);
       searches++;
       const needle = query.replaceAll('^^', '^');
+      if (!searchFilter(needle)) return { items: [], load() {} };
       const items = [];
       for (let position = text.indexOf(needle, this.start);
         position >= 0 && position + needle.length <= this.end;
@@ -104,7 +106,7 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
       return callback(context);
     },
   };
-  return { selections, colors, tracked, searchCount: () => searches };
+  return { context, selections, colors, tracked, searchCount: () => searches };
 }
 test('cursor-to-end reading and ordered repeats survive skipped highlights and previous', async () => {
   const f = documentFixture('Intro. Same. Same.', 7, 7);
@@ -166,6 +168,7 @@ test('stale queued requests are discarded and errors leave the queue usable', as
 test('caret reading starts at its sentence, retaining the original caret bookmark', async () => {
   for (const [text, caret, expected] of [
     ['First. Ravens in between.', 11, 'Ravens in between.'],
+    ['First. Ravens in between.', 14, 'Ravens in between.'],
     ['First sentence.', 4, 'First sentence.'],
     ['First. Next.', 7, 'Next.'],
     ['Same. Same. Same.', 14, 'Same.'],
@@ -194,4 +197,93 @@ test('paragraph API failure falls back to the caret', async () => {
     return callback(context);
   });
   assert.equal(await reader.read(), 'ond.');
+  assert.equal(reader.lastStartMethod, 'cursor-fallback');
+  assert.equal(reader.lastStartError, 'unsupported');
+});
+
+for (const method of ['sentence', 'preceding-text', 'cursor-fallback']) {
+  test(`sentence search records ${method} when Word omits search results`, async () => {
+    const text = 'This sentence appears twice in the document. Something else happens in between. '
+      + 'This sentence appears twice in the document.';
+    const offset = text.indexOf('Something');
+    const caret = text.indexOf('happens') + 3;
+    documentFixture(text, caret, caret, null, (query) =>
+      method === 'sentence' ? !query.endsWith(' ') : method === 'preceding-text' && query.endsWith(' '));
+    const reader = new WordReader();
+    assert.equal(await reader.read(), text.slice(method === 'cursor-fallback' ? caret : offset));
+    assert.equal(reader.lastStartMethod, method);
+  });
+}
+test('sentence search uses the leading 200 characters and escapes carets', async () => {
+  const text = 'First. A^ ' + 'word '.repeat(60) + 'ends.';
+  const caret = text.length - 2;
+  documentFixture(text, caret, caret, null, (query) => {
+    assert.ok(query.length <= 200);
+    return query.startsWith('A^');
+  });
+  const reader = new WordReader();
+  assert.equal(await reader.read(), text.slice(7));
+  assert.equal(reader.lastStartMethod, 'sentence');
+});
+
+for (const yellow of [false, true]) {
+  test(`latest highlight wins during slow Word sync, yellow=${yellow}`, async () => {
+    const f = documentFixture('One. Two. Three. Four.', 0, 22);
+    const reader = new WordReader();
+    await reader.read();
+    reader.chunks = ['One.', 'Two.', 'Three.', 'Four.'];
+    // Prepare mappings so the held sync is immediately before the visible mutation.
+    await reader.highlight(3, 'Four.', false);
+    f.selections.length = 0;
+    let release;
+    let entered;
+    const waiting = new Promise((resolve) => { entered = resolve; });
+    f.context.sync = () => {
+      entered();
+      return new Promise((resolve) => { release = resolve; });
+    };
+    // Yellow loads its colour before changing it; selection holds the mapping sync.
+    if (!yellow) reader.mappedThrough = 2;
+    const old = reader.highlight(3, 'Four.', yellow);
+    await waiting;
+    reader.invalidate();
+    const latest = reader.highlight(2, 'Three.', yellow);
+    f.context.sync = async () => {};
+    release();
+    await Promise.all([old, latest]);
+    if (yellow) {
+      assert.equal(f.colors.get('10:16'), '#FFFF00');
+      assert.notEqual(f.colors.get('17:22'), '#FFFF00');
+    } else {
+      assert.deepEqual(f.selections, [[10, 16]]);
+    }
+  });
+}
+
+test('latest selection runs after an obsolete select already sent to Word', async () => {
+  const f = documentFixture('One. Two. Three. Four.', 0, 22);
+  const reader = new WordReader();
+  await reader.read();
+  reader.chunks = ['One.', 'Two.', 'Three.', 'Four.'];
+  await reader.highlight(3, 'Four.', false);
+  f.selections.length = 0;
+  let release;
+  let entered;
+  const waiting = new Promise((resolve) => { entered = resolve; });
+  const pending = [];
+  f.context.select = (range) => pending.push(range);
+  f.context.sync = async () => {
+    if (pending[0]?.[0] === 17) {
+      entered();
+      await new Promise((resolve) => { release = resolve; });
+    }
+    f.selections.push(...pending.splice(0));
+  };
+  const old = reader.highlight(3, 'Four.', false);
+  await waiting;
+  reader.invalidate();
+  const latest = reader.highlight(2, 'Three.', false);
+  release();
+  await Promise.all([old, latest]);
+  assert.deepEqual(f.selections, [[17, 22], [10, 16]]);
 });

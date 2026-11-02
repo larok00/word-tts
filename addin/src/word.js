@@ -15,6 +15,8 @@ export class WordReader {
     this.mappedThrough = -1;
     this.cursor = null;
     this.chunks = [];
+    this.lastStartMethod = null;
+    this.lastStartError = null;
   }
   /** Serialize mutations, absorbing Word failures without poisoning later work. */
   enqueue(work) {
@@ -23,6 +25,8 @@ export class WordReader {
   }
   /** Capture text and track ranges: Office otherwise releases proxies after Word.run ends. */
   async read() {
+    this.lastStartMethod = null;
+    this.lastStartError = null;
     await this.cleanup(false);
     return Word.run(async (context) => {
       const selection = context.document.getSelection();
@@ -50,27 +54,45 @@ export class WordReader {
       prefix.load('text');
       await context.sync();
       const offset = sentenceStartOffset(prefix.text);
-      if (!offset) return start;
-      if (offset === prefix.text.length) return cursor;
-      // Search the end of the preceding text, keeping below Word's search limit.
-      const before = prefix.text.slice(0, offset);
-      const matches = prefix.search(before.slice(-100).replaceAll('^', '^^'), {
-        matchCase: true, matchWildcards: false,
-      });
-      matches.load('items');
-      await context.sync();
-      const candidates = matches.items.map((match) => ({
-        end: match.getRange('End'),
-        prefix: start.expandTo(match.getRange('End')),
-      }));
-      for (const candidate of candidates) candidate.prefix.load('text');
-      await context.sync();
-      // Repeated text must resolve to this exact offset, never a later occurrence.
-      const found = candidates.find((candidate) => candidate.prefix.text.length === offset);
-      if (found) return found.end;
-    } catch {
-      /* Cursor-to-end remains available on API or search failure. */
+      if (!offset) {
+        this.lastStartMethod = 'paragraph';
+        return start;
+      }
+      if (offset === prefix.text.length) {
+        this.lastStartMethod = 'sentence';
+        return cursor;
+      }
+      // Search sentence text first: Word may ignore trailing spaces in preceding text.
+      for (const preceding of [false, true]) {
+        try {
+          const text = preceding
+            ? prefix.text.slice(0, offset).slice(-100)
+            : prefix.text.slice(offset).slice(0, 200);
+          const matches = prefix.search(text.replaceAll('^', '^^'), {
+            matchCase: true, matchWildcards: false,
+          });
+          matches.load('items');
+          await context.sync();
+          const candidates = matches.items.map((match) => {
+            const range = match.getRange(preceding ? 'End' : 'Start');
+            return { range, prefix: start.expandTo(range) };
+          });
+          for (const candidate of candidates) candidate.prefix.load('text');
+          await context.sync();
+          // Compare offsets so repeated sentences cannot move the reading position.
+          const found = candidates.find((candidate) => candidate.prefix.text.length === offset);
+          if (found) {
+            this.lastStartMethod = preceding ? 'preceding-text' : 'sentence';
+            return found.range;
+          }
+        } catch (error) {
+          this.lastStartError = error.message || String(error);
+        }
+      }
+    } catch (error) {
+      this.lastStartError = error.message || String(error);
     }
+    this.lastStartMethod = 'cursor-fallback';
     return cursor;
   }
   /** Restore temporary formatting before applying the next highlight. */
@@ -81,6 +103,10 @@ export class WordReader {
     await context.sync();
     range.untrack();
     this.yellow = null;
+  }
+  /** Navigation cancels obsolete Word work before speech can emit callbacks. */
+  invalidate() {
+    ++this.generation;
   }
   /** Highlight a current request only; cached matches support previous/retry navigation. */
   highlight(index, chunk, yellowMode) {

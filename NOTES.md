@@ -250,3 +250,65 @@ Bend splitter tests: 27 passed, 0 failed; splitter check passes; parallel demo p
 the build regenerated identical compiled JS. `npm run validate` was attempted,
 but this installed XML validator requires Microsoft’s online validation service
 and cannot pass offline (DNS EAI_AGAIN); no successful schema validation is claimed.
+
+
+## Windows test round 3 (2026-11-02)
+
+Real Word for Windows tested v1.0.1. **Passes:** no resource-load toast; the second
+copy of a repeated sentence highlighted correctly; Ctrl+Alt+Shift+X stopped reading
+without a Word shortcut clash.
+
+**Findings:** Play with the cursor inside “happens” still began inside the word;
+Previous showed sentence 2 in the pane while Word still selected sentence 3;
+Resume briefly retained “Paused. Press Resume to continue.” The live Pages files
+contained the v1.0.1 fixes, but the pane appeared to run v1.0.0 JavaScript.
+
+**Likely root cause:** our cache-first service worker served the previous release
+on the first pane load after deployment, updating in the background. GitHub Pages'
+600-second HTTP cache could also supply stale files during worker precaching.
+This diagnosis fits the manifest fixes taking effect while JS fixes did not; it
+still needs a fresh Windows test of v1.0.2.
+
+Fixes for **v1.0.2**:
+
+- Same-origin GETs now use network-first fetch with `cache: 'no-cache'`, a three-second
+  timeout, cache updates on success, and cached fallback on failure or timeout.
+  Precache uses reload requests; versioned pane/assets can use unversioned offline
+  copies. Office.js precaching stays optional. Content-hashed cache retention stays.
+- `addin/package.json` is the version source. The build stamps manifest Version
+  1.0.2.0, both taskpane URLs, CSS/JS query strings, a visible footer and the exported
+  JS version constant. After updates, fully close and reopen Word and check the footer.
+- Sentence lookup searches the leading current-sentence text first (up to 200 chars,
+  escaping carets), verifies its exact paragraph offset, then tries preceding text,
+  then the cursor. Collapsed cursors within and between words share this path;
+  paragraph-start and sentence-boundary cases are covered too. Diagnostics records
+  the last start method and caught error without showing document text. Office Play
+  uses the same `toggle() → play() → reader.read()` path as the pane controls.
+- Player cancellation now invalidates Word highlight generations before cancelling
+  speech, including navigation, play(index), stop and restarts. Existing generation
+  checks before selection/yellow and the serialized queue ensure the latest highlight
+  runs after obsolete in-flight work. Tests hold Word sync before mutation and while
+  an already-sent selection completes; late cancelled speech callbacks cannot move
+  playback or trigger an old chunk start.
+- Resume status updates synchronously through the real Player for pane Resume, Space,
+  Office Play/Pause, restart, rate-change and error-pause paths. Voice refresh messages
+  now apply only while idle, preserving active playback status. Browser pause events
+  have no UI handler; cancelled attempt callbacks remain ignored.
+
+- Follow-up: the build appends `?v=<version>` to every relative ES module import in
+  dist/ (src/ unchanged), so even a pane still controlled by the old v1.0.1 cache-first
+  worker fetches all v1.0.2 modules on its first load instead of mixing versions.
+
+Local verification: 96 JS tests pass after the follow-up (95 before it) (detailed count with `--test-isolation=none`),
+including worker success/failure/timeout/install, built packaging, Word search and
+controlled-sync races, late speech callbacks and all Resume paths. The requested
+standard test command and Pages build pass. Bend splitter: 27 passed, 0 failed.
+No `bend/` files changed; generated splitter JS is unchanged. Real Windows retesting
+is still required; these are local mocks and package checks.
+
+**Released v1.0.2 (2026-11-02):** published to gh-pages, GitHub release v1.0.2 with
+the install zip (release/read-aloud-plus-install.zip, manifest Version 1.0.2.0).
+Codex prompt: agent-prompts/05-round3-fixes.md. Next Windows retest:
+testing/windows-e2e-round4-codex-prompt.md (version label, Diagnostics start method,
+three fresh-screenshot attempts per timing check, report REPORT-round4.md).
+Codex credits unchanged during this work (balance 160.4607160000).

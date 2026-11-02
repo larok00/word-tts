@@ -221,3 +221,26 @@ for (const paused of [false, true]) {
     }
   });
 }
+
+test('repeated Previous ignores all late callbacks from cancelled utterances', () => {
+  let invalidations = 0;
+  const f = fixture({ chunks: ['One.', 'Two.', 'Three.', 'Four.'],
+    onInvalidate: () => invalidations++ });
+  f.player.play(3);
+  const cancelled = [];
+  for (const index of [2, 1, 0]) {
+    cancelled.push(f.current());
+    const before = invalidations;
+    f.player.previous();
+    assert.ok(invalidations > before);
+    for (const utterance of cancelled) {
+      utterance.onstart();
+      utterance.onboundary();
+      utterance.onend();
+      utterance.onerror({ error: 'network' });
+    }
+    assert.equal(f.player.index, index);
+    assert.equal(f.player.state, 'playing');
+  }
+  assert.deepEqual(f.starts, [3, 2, 1, 0]);
+});

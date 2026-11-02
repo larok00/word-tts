@@ -8,6 +8,7 @@ import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 const root = fileURLToPath(new URL('../', import.meta.url));
+const { version } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
 const base = (process.env.BASE_URL || 'https://localhost:3000').replace(/\/+$/, '');
 const parsed = new URL(base);
 if (parsed.protocol !== 'https:' || parsed.search || parsed.hash)
@@ -52,9 +53,14 @@ function escapeXml(value) {
     .replaceAll('>', '&gt;');
 }
 const manifest = (await readFile(path.join(root, 'manifest.template.xml'), 'utf8'))
+  .replaceAll('{{VERSION}}', version)
   .replaceAll('{{BASE_URL}}', escapeXml(base))
   .replaceAll('{{ORIGIN}}', escapeXml(parsed.origin));
 await writeFile(path.join(root, 'dist/manifest.xml'), manifest);
+for (const file of ['taskpane.html', 'lib/version.js']) {
+  const source = await readFile(path.join(root, 'src', file), 'utf8');
+  await writeFile(path.join(root, 'dist', file), source.replaceAll('{{VERSION}}', version));
+}
 const definitions = [
   ['TogglePlayPause', 'Play or pause', 'P'],
   ['Stop', 'Stop reading', 'X'],
@@ -85,6 +91,15 @@ async function filesUnder(directory, prefix = '') {
   return files;
 }
 const files = (await filesUnder(path.join(root, 'dist'))).filter((file) => file !== 'sw.js');
+// Bypass the previous cache-first worker for every module in the first upgraded load.
+for (const file of files.filter((file) => /^(?:lib\/)?[^/]+\.js$/.test(file))) {
+  const target = path.join(root, 'dist', file);
+  const source = await readFile(target, 'utf8');
+  await writeFile(target, source.replace(
+    /(\bfrom\s*|\bimport\s*(?:\(\s*)?)(['"])(\.{1,2}\/[^'"?]+)\2/g,
+    (_, prefix, quote, specifier) => `${prefix}${quote}${specifier}?v=${version}${quote}`,
+  ));
+}
 const hash = createHash('sha256');
 for (const file of files) {
   hash.update(file);

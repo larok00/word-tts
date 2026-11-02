@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, access } from 'node:fs/promises';
+import { readFile, access, readdir } from 'node:fs/promises';
 const root = new URL('../', import.meta.url);
 test('build substitutes deployment URL and copies all HTML references', async () => {
   await promisify(execFile)(process.execPath, ['scripts/build.mjs'], {
@@ -16,8 +16,13 @@ test('build substitutes deployment URL and copies all HTML references', async ()
   const manifest = await readFile(new URL('dist/manifest.xml', root), 'utf8');
   assert.ok(manifest.includes('https://example.github.io/word-tts/taskpane.html'));
   assert.ok(!manifest.includes('{{BASE_URL}}'));
+  assert.equal((manifest.match(/taskpane.html\?v=1.0.2/g) || []).length, 2);
   assert.equal(await readFile(new URL('dist/install/manifest.xml', root), 'utf8'), manifest);
   const html = await readFile(new URL('dist/taskpane.html', root), 'utf8');
+  assert.ok(html.includes('taskpane.css?v=1.0.2'));
+  assert.ok(html.includes('taskpane.js?v=1.0.2'));
+  assert.ok(html.includes('Read Aloud+ v1.0.2'));
+  assert.ok((await readFile(new URL('dist/lib/version.js', root), 'utf8')).includes("VERSION = '1.0.2'"));
   for (const match of html.matchAll(/(?:src|href)="([^"]+)"/g)) {
     if (!match[1].startsWith('https:')) await access(new URL('dist/' + match[1], root));
   }
@@ -26,6 +31,23 @@ test('build substitutes deployment URL and copies all HTML references', async ()
   assert.ok(worker.includes('./lib/player.js'));
   const shortcuts = JSON.parse(await readFile(new URL('dist/shortcuts.json', root), 'utf8'));
   assert.equal(shortcuts.actions.length, 6);
+});
+
+test('built relative module imports carry the release version and work in Node', async () => {
+  let imports = 0;
+  for (const directory of ['dist/', 'dist/lib/']) {
+    for (const file of await readdir(new URL(directory, root))) {
+      if (!file.endsWith('.js')) continue;
+      const source = await readFile(new URL(directory + file, root), 'utf8');
+      for (const match of source.matchAll(/\b(?:from\s*|import\s*(?:\(\s*)?)['"](\.{1,2}\/[^'"]+)['"]/g)) {
+        assert.ok(match[1].endsWith('?v=1.0.2'), `${directory}${file}: ${match[1]}`);
+        imports++;
+      }
+    }
+  }
+  assert.ok(imports > 0);
+  const { sentenceStartOffset } = await import('../dist/lib/sentence-start.js?v=1.0.2');
+  assert.equal(sentenceStartOffset('First. Second. '), 15);
 });
 
 // This is a real cache lifecycle change, so test retention independently of the DOM.
@@ -97,7 +119,7 @@ test('shortcut package avoids known Word bindings and registers every action', a
     assert.equal(shortcuts.shortcuts.filter((s) => s.action === action.id).length, 1);
   }
   const manifest = await readFile(new URL('dist/manifest.xml', root), 'utf8');
-  assert.ok(manifest.includes('<Version>1.0.1.0</Version>'));
+  assert.ok(manifest.includes('<Version>1.0.2.0</Version>'));
   assert.ok(manifest.includes('<AppDomain>https://example.github.io</AppDomain>'));
   assert.ok(manifest.includes('/assets/icon-64.png'));
   for (const match of manifest.matchAll(/https:\/\/example.github.io\/word-tts\/([^"<]+)/g)) {

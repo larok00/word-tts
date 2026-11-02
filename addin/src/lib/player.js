@@ -10,10 +10,11 @@ export class Player {
     voices = [],
     clock = globalThis,
     onChunkStart = () => {},
+    onInvalidate = () => {},
     onStateChange = () => {},
     onError = () => {},
   }) {
-    Object.assign(this, { engine, chunks, voices, clock, onChunkStart, onStateChange, onError });
+    Object.assign(this, { engine, chunks, voices, clock, onChunkStart, onInvalidate, onStateChange, onError });
     this.state = 'idle';
     this.index = 0;
     this.rate = 1;
@@ -38,6 +39,7 @@ export class Player {
   }
   /** Invalidate old utterances before cancel(), which may synchronously emit errors. */
   cancel() {
+    this.notify(this.onInvalidate);
     this.attempt++;
     this.needsRestart = true;
     this.clock.clearTimeout(this.watchdog);

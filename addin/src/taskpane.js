@@ -1,6 +1,7 @@
 /** UI glue: connects DOM controls, Office lifecycle, WordReader, and Player.
  * No exports; loading this module registers pane controls and document shortcuts.
  */
+import { VERSION } from './lib/version.js';
 import { Player } from './lib/player.js';
 import { splitSentences } from './lib/splitter.js';
 import { filterVoices, pickDefault, buildFallbackOrder } from './lib/voices.js';
@@ -22,6 +23,8 @@ for (const id of [
   'yellow',
   'status',
   'now',
+  'version',
+  'diagnostics',
 ]) {
   elements[id] = document.getElementById(id);
 }
@@ -34,6 +37,13 @@ try {
 const settings = loadSettings(storage);
 const synth = window.speechSynthesis;
 const reader = new WordReader();
+elements.version.textContent = `Read Aloud+ v${VERSION}`;
+/** Keep the last read decision available without exposing document text. */
+function diagnostics() {
+  elements.diagnostics.textContent = `Version ${VERSION}; start: ${reader.lastStartMethod || 'not read yet'}`
+    + (reader.lastStartError ? `; error: ${reader.lastStartError}` : '');
+}
+diagnostics();
 let voices = [];
 let ready = false;
 let loading = false;
@@ -74,6 +84,7 @@ const engine = {
 };
 const player = new Player({
   engine,
+  onInvalidate: () => reader.invalidate(),
   /** Word requests are deliberately not awaited by speech callbacks. */
   onChunkStart(index) {
     elements.now.textContent = player.chunks[index];
@@ -134,6 +145,7 @@ function refreshVoices() {
     settings.voiceURI = selected.voiceURI;
   }
   updateFallback();
+  if (player.state !== 'idle') return;
   if (!voices.length)
     status(
       'No voices yet. Add Windows voices in Settings → Time & language → Speech → Add voices.',
@@ -162,6 +174,7 @@ async function play() {
   status('Getting text from Word…');
   try {
     const text = await reader.read();
+    diagnostics();
     if (request !== playRequest) {
       void reader.cleanup();
       return;
