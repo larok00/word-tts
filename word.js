@@ -1,8 +1,8 @@
 /** Word API boundary. Exports WordReader; speech never waits for its serialized
  * highlight queue. Tracked ranges remain valid across separate Word.run batches.
  */
-import { sentenceStartOffset } from './lib/sentence-start.js?v=1.0.2';
-import { mapChunkToSearch } from './lib/mapping.js?v=1.0.2';
+import { sentenceStartOffset } from './lib/sentence-start.js?v=1.0.3';
+import { mapChunkToSearch } from './lib/mapping.js?v=1.0.3';
 export class WordReader {
   /** Keep document state separate from the speech session. */
   constructor() {
@@ -12,9 +12,8 @@ export class WordReader {
     this.original = null;
     this.yellow = null;
     this.matches = new Map();
-    this.mappedThrough = -1;
-    this.cursor = null;
     this.chunks = [];
+    this.lastHighlight = null;
     this.lastStartMethod = null;
     this.lastStartError = null;
   }
@@ -27,6 +26,7 @@ export class WordReader {
   async read() {
     this.lastStartMethod = null;
     this.lastStartError = null;
+    this.lastHighlight = null;
     await this.cleanup(false);
     return Word.run(async (context) => {
       const selection = context.document.getSelection();
@@ -108,58 +108,96 @@ export class WordReader {
   invalidate() {
     ++this.generation;
   }
-  /** Highlight a current request only; cached matches support previous/retry navigation. */
+  /** Chunk offsets include whitespace and paragraph marks in the original reading text. */
+  chunkOffset(index) {
+    return this.chunks.slice(0, index).reduce((offset, chunk) => offset + chunk.length, 0)
+      + (this.chunks[index]?.search(/\S/) || 0);
+  }
+  /** Search the whole reading range, then disambiguate duplicates by prefix length. */
+  async mapIndex(context, index, chunk) {
+    const search = mapChunkToSearch(chunk);
+    if (!search) return null;
+    const results = this.reading.search(search, { matchCase: true, matchWildcards: false });
+    results.load('items');
+    await context.sync();
+    const start = this.reading.getRange('Start');
+    const candidates = results.items.map((range) => ({
+      range, prefix: start.expandTo(range.getRange('Start')),
+    }));
+    for (const candidate of candidates) candidate.prefix.load('text');
+    await context.sync();
+    return candidates.find(({ prefix }) => prefix.text.length === this.chunkOffset(index))?.range || null;
+  }
+  /** Verify the visible selection's position as well as its text (duplicates can match). */
+  async selectRange(context, range, index, chunk, yellowMode, generation) {
+    if (generation !== this.generation) return;
+    if (yellowMode) {
+      range.font.load('highlightColor');
+      await context.sync();
+      if (generation !== this.generation) return;
+      const color = range.font.highlightColor;
+      if (color !== '' && String(color).toLowerCase() !== 'mixed') {
+        this.yellow = { range: range.getRange(), color };
+        this.yellow.range.track();
+        range.font.highlightColor = '#FFFF00';
+        await context.sync();
+        return;
+      }
+    }
+    if (generation !== this.generation) return;
+    range.select();
+    await context.sync();
+    if (generation !== this.generation) return;
+    const selection = context.document.getSelection();
+    const prefix = this.reading.getRange('Start').expandTo(selection.getRange('Start'));
+    selection.load('text');
+    prefix.load('text');
+    await context.sync();
+    if (generation !== this.generation) return;
+    const expected = mapChunkToSearch(chunk)?.replaceAll('^^', '^');
+    if (prefix.text.length !== this.chunkOffset(index) || selection.text !== expected)
+      throw new Error('Word selection did not match the chunk offset/text');
+  }
+  /** Retry invalid cached proxies with a fresh search; publish failures for Diagnostics. */
   highlight(index, chunk, yellowMode) {
     const generation = ++this.generation;
     return this.enqueue(async () => {
       if (generation !== this.generation || !this.reading) return;
-      await Word.run(this.reading, async (context) => {
-        await this.restoreYellow(context);
+      let error = null;
+      let method = 'not-found';
+      // Also retry a fresh range if Word ignores its first selection request.
+      for (let attempt = 0; attempt < 2; attempt++) {
         if (generation !== this.generation) return;
-        // Map skipped sentences too, so rapid Next and repeated text stay ordered.
-        // Mapping can lag behind speech; generation checks discard obsolete UI work.
-        for (let current = this.mappedThrough + 1; current <= index; current++) {
-          if (generation !== this.generation) return;
-          const search = mapChunkToSearch(this.chunks[current] ?? (current === index ? chunk : ''));
-          let found = null;
-          if (search) {
-            const start = this.cursor || this.reading.getRange('Start');
-            const scope = start.expandTo(this.reading.getRange('End'));
-            const results = scope.search(search, { matchCase: true, matchWildcards: false });
-            results.load('items');
-            await context.sync();
-            found = results.items[0] || null;
-          }
-          if (found) {
-            found.track();
-            if (this.cursor) this.cursor.untrack();
-            this.cursor = found.getRange('End');
-            this.cursor.track();
-          }
-          this.matches.set(current, found);
-          this.mappedThrough = current;
+        const cached = attempt === 0 ? this.matches.get(index) : null;
+        method = cached ? 'cached' : 'remapped';
+        try {
+          // A failed Office batch may contain invalid proxies; retry in a new batch.
+          await Word.run(this.reading, async (context) => {
+            await this.restoreYellow(context);
+            if (generation !== this.generation) return;
+            const range = cached || await this.mapIndex(context, index, chunk);
+            if (generation !== this.generation) return;
+            if (!range) {
+              method = 'not-found';
+              return;
+            }
+            if (!cached) {
+              const old = this.matches.get(index);
+              if (old) {
+                try { old.untrack(); } catch { /* Invalid proxies may already be released. */ }
+              }
+              range.track();
+              this.matches.set(index, range);
+            }
+            await this.selectRange(context, range, index, chunk, yellowMode, generation);
+          });
+          break;
+        } catch (caught) {
+          method = 'not-found';
+          error = caught.message || String(caught);
         }
-        if (generation !== this.generation) return;
-        const range = this.matches.get(index);
-        if (!range) return;
-        if (yellowMode) {
-          range.font.load('highlightColor');
-          await context.sync();
-          if (generation !== this.generation) return;
-          const color = range.font.highlightColor;
-          // Word represents mixed formatting as an empty string on some builds.
-          if (color !== '' && String(color).toLowerCase() !== 'mixed') {
-            this.yellow = { range: range.getRange(), color };
-            this.yellow.range.track();
-            range.font.highlightColor = '#FFFF00';
-          } else {
-            range.select();
-          }
-        } else {
-          range.select();
-        }
-        await context.sync();
-      });
+      }
+      if (generation === this.generation) this.lastHighlight = { index, method, error };
     });
   }
   /** Error/finish restores yellow without discarding navigation or the selection bookmark. */
@@ -180,13 +218,10 @@ export class WordReader {
         if (restoreSelection && this.original) this.original.select();
         for (const range of this.matches.values()) if (range) range.untrack();
         this.matches.clear();
-        if (this.cursor) this.cursor.untrack();
         if (this.reading) this.reading.untrack();
         if (this.original) this.original.untrack();
-        this.cursor = null;
         this.reading = null;
         this.original = null;
-        this.mappedThrough = -1;
         this.chunks = [];
         await context.sync();
       });
