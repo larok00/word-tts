@@ -41,7 +41,7 @@
     {
       "action": "Stop",
       "key": {
-        "default": "Ctrl+Alt+Shift+S"
+        "default": "Ctrl+Alt+Shift+X"
       }
     },
     {

@@ -5,8 +5,8 @@
  * Office.js loads more resources itself; opaque CDN caching cannot guarantee Office
  * startup offline. Never fail installation merely because the CDN is unavailable.
  */
-const CACHE = 'read-aloud-plus-1aa4ccbc9e0a9c4e';
-const FILES = ["./assets/icon-128.png", "./assets/icon-16.png", "./assets/icon-32.png", "./assets/icon-64.png", "./assets/icon-80.png", "./help.html", "./lib/mapping.js", "./lib/player.js", "./lib/settings.js", "./lib/splitter-fallback.js", "./lib/splitter.bend.mjs", "./lib/splitter.js", "./lib/voices.js", "./manifest.xml", "./shortcuts.json", "./taskpane.css", "./taskpane.html", "./taskpane.js", "./word.js"];
+const CACHE = 'read-aloud-plus-928299cd2c57c527';
+const FILES = ["./assets/icon-128.png", "./assets/icon-16.png", "./assets/icon-32.png", "./assets/icon-64.png", "./assets/icon-80.png", "./help.html", "./lib/mapping.js", "./lib/player.js", "./lib/sentence-start.js", "./lib/settings.js", "./lib/splitter-fallback.js", "./lib/splitter.bend.mjs", "./lib/splitter.js", "./lib/voices.js", "./manifest.xml", "./shortcuts.json", "./taskpane.css", "./taskpane.html", "./taskpane.js", "./word.js"];
 const OFFICE = 'https://appsforoffice.microsoft.com/lib/1/hosted/office.js';
 // Cache the local application atomically; the optional opaque CDN response separately.
 self.addEventListener('install', (event) => {
