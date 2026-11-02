@@ -312,3 +312,74 @@ Codex prompt: agent-prompts/05-round3-fixes.md. Next Windows retest:
 testing/windows-e2e-round4-codex-prompt.md (version label, Diagnostics start method,
 three fresh-screenshot attempts per timing check, report REPORT-round4.md).
 Codex credits unchanged during this work (balance 160.4607160000).
+
+## Windows test round 4 (2026-11-02)
+
+Real Word for Windows confirmed **v1.0.2** in both footer and Diagnostics.
+**Passes:** Play mid-word began at “Something” (`start: sentence`), Pause/Resume
+updated status immediately, and the second copy of the repeated sentence selected.
+
+Fixes for **v1.0.3** (manifest Version **1.0.3.0**):
+
+- **B — load error and dead document shortcuts:** the only manifest difference
+  from working v1.0.1 was `?v=1.0.2` on SourceLocation and Taskpane.Url. Successful
+  HTTP responses did not fix Office's cached shared-runtime/function-file identity.
+  Changing that identity likely caused the resource-load error, development-add-in
+  error, missing Home button and dead shortcuts. Both URLs are stable again; no
+  manifest URL has a query string, and VERSION substitution occurs only in Version.
+  The build test locks the specific v1.0.1 URL set and checks that SourceLocation,
+  Taskpane.Url, Runtime and FunctionFile resolve to the same unversioned pane.
+  SharedRuntime 1.1, Runtime lifetime="long", FunctionFile's shared resource,
+  HTTPS-origin AppDomain, 64px high-resolution icon and local resource packaging
+  remain consistent. No additional manifest defect was identified in this offline
+  review; no online schema validation or Windows recovery is claimed.
+  Office action registration now happens at module top level inside onReady before
+  settings/voices setup, with no await before association. Tests check exact shortcut
+  action ID equality and registration even when settings or voices throw. Cache-busting
+  stays inside HTML CSS/JS references and relative module imports. The network-first
+  worker still precaches and serves unversioned taskpane.html offline. INSTALL.md
+  explains fully closing Word and clearing the contents of
+  `%LOCALAPPDATA%\Microsoft\Office\16.0\Wef\` if registration errors persist.
+- **C — Previous selection:** the reader trusted cached proxies, mapped through a
+  moving first-match cursor and silently swallowed Word errors. A stale proxy,
+  failed select/sync or ignored selection could therefore leave the long sentence
+  selected while the player and pane correctly moved back. Tests reproduce these
+  failure paths; the exact real-host cause still needs Windows Diagnostics.
+  Mapping now searches within the reading range and chooses the candidate whose
+  prefix length equals the chunk's cumulative offset plus leading whitespace.
+  This handles repeats, paragraph marks and split long sentences without depending
+  on earlier highlights. Chunks retain whitespace so their concatenation stays the
+  reading text. After selection, the reader loads its text and prefix length to
+  verify both content and position. Failed cached operations retry with a fresh
+  search in a separate Word batch. Generation checks and the serialized queue keep
+  the newest request in charge, including when an obsolete select was already sent.
+  `lastHighlight` records index, cached/remapped/not-found and caught error; the pane
+  refreshes Diagnostics after highlighting. Unrecoverable host/search failures are
+  visible there, rather than being reported as successful selection.
+  Integration tests load sample.docx paragraphs 4–5 with a paragraph mark, start
+  inside “happens”, and wire the real Player to WordReader as the pane does. They
+  cover pending search/select, wrong duplicate ranges, thrown select, rejected sync,
+  ignored select, late cancelled speech events, and navigation across the paragraph
+  and both chunks of the long sentence. Selection still uses the search prefix for
+  long chunks (up to 250 escaped characters); full long-chunk selection is unchanged.
+- **D — long fixture:** `testing/fixtures/make_sample_long.py` preserves sample.docx's
+  original text/formatting, adds normal repeated filler, and inserts explicit page
+  breaks with roughly 400 words per page to leave room for paragraph spacing.
+  Generated `sample-long.docx` has 26 page breaks (27 explicit pages), with the unique
+  PAGE FIFTEEN MARKER paragraph immediately after break 14. `--check` verifies the
+  marker count, position, original text and minimum page-break count; the Node suite
+  runs that check. Pagination can still vary with Word's layout settings.
+
+Local verification: **110 JS tests passed**, 0 failed, using
+`cd addin && node --test --test-isolation=none test/*.test.mjs`.
+`BASE_URL=https://larok00.github.io/word-tts npm run build` passed.
+`~/.bend/bin/bend bend/splitter_test.bend`: **27 passed, 0 failed**.
+No `bend/` files changed; the regenerated compiled splitter is unchanged.
+No network, commit, push or git configuration changes were needed. Real Word for
+Windows retesting of the load error, shortcuts and selection recovery remains.
+
+**Released v1.0.3 (2026-11-02):** published to gh-pages, GitHub release v1.0.3 with
+`read-aloud-plus-install.zip` (manifest URLs identical to v1.0.1, Version 1.0.3.0).
+Round-5 Windows test prompt: `testing/windows-e2e-round5-codex-prompt.md` (uses
+`testing/fixtures/sample.docx` and `sample-long.docx`). Before round 5, run
+`install.cmd` from the v1.0.3 zip so the new manifest is in place.

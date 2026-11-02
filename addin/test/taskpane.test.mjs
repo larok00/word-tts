@@ -6,7 +6,7 @@ import { runInNewContext } from 'node:vm';
 import { Player } from '../src/lib/player.js';
 const source = (await readFile(new URL('../src/taskpane.js', import.meta.url), 'utf8'))
   .replace(/^import .*;$/gm, '');
-function fixture() {
+function fixture(failSetup = false, highlightOutcome = null) {
   const elements = new Map();
   const keys = {};
   const actions = {};
@@ -20,8 +20,9 @@ function fixture() {
     onReady: (callback) => callback(),
     actions: { associate: (name, callback) => { actions[name] = callback; } },
   };
+  try {
   runInNewContext(source, {
-    VERSION: '1.0.2', ...clock, Office: office,
+    VERSION: '1.0.3', ...clock, Office: office,
     document: {
       getElementById(id) {
         const handlers = {};
@@ -37,23 +38,26 @@ function fixture() {
     },
     window: { Office: office, addEventListener() {}, speechSynthesis: {
       speak: (utterance) => utterances.push(utterance),
-      cancel() {}, pause() {}, resume() {}, getVoices: () => [voice],
+      cancel() {}, pause() {}, resume() {}, getVoices: () => { if (failSetup === 'voices') throw Error('voices unavailable'); return [voice]; },
       addEventListener: (_, callback) => { voiceChange = callback; },
     } },
     SpeechSynthesisUtterance: class { constructor(text) { this.text = text; } },
     navigator: {},
-    loadSettings: () => ({ rate: 1 }), saveSettings() {}, normalizeRate: (rate) => rate,
+    loadSettings: () => { if (failSetup === 'settings') throw Error('settings unavailable'); return { rate: 1 }; }, saveSettings() {}, normalizeRate: (rate) => rate,
     filterVoices: (voices) => voices, pickDefault: (voices) => voices[0],
     buildFallbackOrder: (voices) => voices,
     splitSentences: () => ['One.', 'Two.'],
     WordReader: class {
       async read() { reads++; this.lastStartMethod = 'sentence'; return 'One. Two.'; }
-      invalidate() {} cleanup() {} highlight() {} clearHighlight() {}
+      invalidate() {} cleanup() {}
+      highlight() { this.lastHighlight = highlightOutcome; }
+      clearHighlight() {}
     },
     Player: class extends Player {
       constructor(options) { super({ ...options, clock }); player = this; }
     },
   });
+  } catch (error) { if (!failSetup) throw error; }
   return { elements, actions, utterances, player, voiceChange,
     reads: () => reads,
     click: (id) => elements.get(id).handlers.click(),
@@ -91,6 +95,22 @@ test('Office Play uses the same document read and diagnostics as the button', as
   await Promise.resolve();
   assert.equal(f.reads(), 1);
   assert.equal(f.player.state, 'playing');
-  assert.equal(f.elements.get('diagnostics').textContent, 'Version 1.0.2; start: sentence');
-  assert.equal(f.elements.get('version').textContent, 'Read Aloud+ v1.0.2');
+  assert.equal(f.elements.get('diagnostics').textContent, 'Version 1.0.3; start: sentence');
+  assert.equal(f.elements.get('version').textContent, 'Read Aloud+ v1.0.3');
+});
+
+for (const failure of ['settings', 'voices']) {
+  test(`Office actions register before failing ${failure} setup`, () => {
+    const f = fixture(failure);
+    assert.deepEqual(Object.keys(f.actions).sort(),
+      ['TogglePlayPause', 'Stop', 'Next', 'Previous', 'SpeedUp', 'SpeedDown'].sort());
+  });
+}
+
+test('Diagnostics displays the completed highlight outcome and error beside start method', async () => {
+  const f = fixture(false, { index: 0, method: 'remapped', error: 'InvalidObjectPath' });
+  await f.click('play');
+  await Promise.resolve();
+  assert.equal(f.elements.get('diagnostics').textContent,
+    'Version 1.0.3; start: sentence; highlight: 1 remapped (InvalidObjectPath)');
 });

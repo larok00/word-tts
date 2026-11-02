@@ -6,10 +6,16 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { Player } from '../src/lib/player.js';
+import { splitSentences } from '../src/lib/splitter.js';
+import { mapChunkToSearch } from '../src/lib/mapping.js';
 import { WordReader } from '../src/word.js';
 /** Emulate context ownership and literal range search without importing Office. */
 function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = null, searchFilter = () => true) {
   const selections = [];
+  let selected = [selectionStart, selectionEnd];
   const colors = new Map();
   const context = { sync: async () => {} };
   const tracked = new Set();
@@ -23,8 +29,8 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
     }
     /** Locate the paragraph containing this range's start. */
     get paragraphs() {
-      return { getFirst: () => new Range(text.lastIndexOf('\n', this.start - 1) + 1,
-        text.indexOf('\n', this.start) < 0 ? text.length : text.indexOf('\n', this.start)) };
+      return { getFirst: () => new Range(Math.max(text.lastIndexOf('\n', this.start - 1), text.lastIndexOf('\r', this.start - 1)) + 1,
+        (() => { const end = text.slice(this.start).search(/[\r\n]/); return end < 0 ? text.length : this.start + end; })()) };
     }
     // Word exposes loaded text after sync; this model supplies it immediately.
     get text() {
@@ -55,6 +61,7 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
     }
     /** Record user-visible document selection changes. */
     select() {
+      selected = [this.start, this.end];
       if (context.select) context.select([this.start, this.end]);
       else selections.push([this.start, this.end]);
     }
@@ -94,7 +101,7 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
     }
   }
   context.document = {
-    getSelection: () => new Range(selectionStart, selectionEnd),
+    getSelection: () => new Range(...selected),
     body: new Range(0, text.length),
   };
   globalThis.Word = {
@@ -231,7 +238,7 @@ for (const yellow of [false, true]) {
     const f = documentFixture('One. Two. Three. Four.', 0, 22);
     const reader = new WordReader();
     await reader.read();
-    reader.chunks = ['One.', 'Two.', 'Three.', 'Four.'];
+    reader.chunks = ['One. ', 'Two. ', 'Three. ', 'Four.'];
     // Prepare mappings so the held sync is immediately before the visible mutation.
     await reader.highlight(3, 'Four.', false);
     f.selections.length = 0;
@@ -243,7 +250,7 @@ for (const yellow of [false, true]) {
       return new Promise((resolve) => { release = resolve; });
     };
     // Yellow loads its colour before changing it; selection holds the mapping sync.
-    if (!yellow) reader.mappedThrough = 2;
+    if (!yellow) reader.matches.delete(3);
     const old = reader.highlight(3, 'Four.', yellow);
     await waiting;
     reader.invalidate();
@@ -255,7 +262,7 @@ for (const yellow of [false, true]) {
       assert.equal(f.colors.get('10:16'), '#FFFF00');
       assert.notEqual(f.colors.get('17:22'), '#FFFF00');
     } else {
-      assert.deepEqual(f.selections, [[10, 16]]);
+      assert.deepEqual(f.selections.at(-1), [10, 16]);
     }
   });
 }
@@ -264,7 +271,7 @@ test('latest selection runs after an obsolete select already sent to Word', asyn
   const f = documentFixture('One. Two. Three. Four.', 0, 22);
   const reader = new WordReader();
   await reader.read();
-  reader.chunks = ['One.', 'Two.', 'Three.', 'Four.'];
+  reader.chunks = ['One. ', 'Two. ', 'Three. ', 'Four.'];
   await reader.highlight(3, 'Four.', false);
   f.selections.length = 0;
   let release;
@@ -286,4 +293,138 @@ test('latest selection runs after an obsolete select already sent to Word', asyn
   release();
   await Promise.all([old, latest]);
   assert.deepEqual(f.selections, [[17, 22], [10, 16]]);
+});
+
+// Read the real DOCX instead of copying text that could drift from the Windows fixture.
+const { stdout: sampleJSON } = await promisify(execFile)('python3', ['-c',
+  'import json,sys; from docx import Document; print(json.dumps([p.text for p in Document(sys.argv[1]).paragraphs][3:5]))',
+  new URL('../../testing/fixtures/sample.docx', import.meta.url).pathname]);
+const sampleText = JSON.parse(sampleJSON).join('\r');
+async function playbackFixture() {
+  const caret = sampleText.indexOf('happens') + 3;
+  const f = documentFixture(sampleText, caret, caret);
+  const reader = new WordReader();
+  const text = await reader.read();
+  const chunks = splitSentences(text, 300);
+  assert.equal(chunks.join(''), text);
+  assert.equal(chunks.length, 4);
+  assert.ok(chunks[1].includes('appears twice'));
+  reader.chunks = chunks;
+  const utterances = [];
+  let now;
+  const player = new Player({
+    engine: { cancel() {}, resume() {}, speak: (u) => utterances.push(u) },
+    clock: { setTimeout() {}, clearTimeout() {} },
+    chunks,
+    onInvalidate: () => reader.invalidate(),
+    onChunkStart(index) { now = chunks[index]; void reader.highlight(index, chunks[index], false); },
+  });
+  player.play();
+  await reader.queue;
+  utterances.at(-1).onend();
+  await reader.queue;
+  return { ...f, reader, player, utterances, chunks, now: () => now };
+}
+function assertSelection(f, index) {
+  const start = sampleText.indexOf('Something')
+    + f.chunks.slice(0, index).join('').length + f.chunks[index].search(/\S/);
+  const prefix = mapChunkToSearch(f.chunks[index]).replaceAll('^^', '^');
+  assert.deepEqual(f.selections.at(-1), [start, start + prefix.length]);
+  assert.equal(f.now(), f.chunks[index]);
+  assert.equal(f.reader.lastHighlight.index, index);
+  assert.notEqual(f.reader.lastHighlight.method, 'not-found');
+}
+for (const pendingAt of ['search', 'select']) {
+  test(`real Player Previous wins with long chunk ${pendingAt} pending and late speech callbacks`, async () => {
+    const f = await playbackFixture();
+    let entered, release;
+    const waiting = new Promise((resolve) => { entered = resolve; });
+    let selected = false;
+    f.context.select = (range) => { selected = true; f.selections.push(range); };
+    f.context.sync = async () => {
+      if ((pendingAt === 'search' || selected) && !release) {
+        entered();
+        await new Promise((resolve) => { release = resolve; });
+      }
+    };
+    f.utterances.at(-1).onend();
+    await waiting;
+    const cancelled = f.utterances.at(-1);
+    f.player.previous();
+    cancelled.onstart(); cancelled.onboundary(); cancelled.onend();
+    cancelled.onerror({ error: 'network' });
+    f.context.sync = async () => {};
+    release();
+    await f.reader.queue;
+    assert.equal(f.player.index, 1);
+    assertSelection(f, 1);
+  });
+}
+for (const stale of ['wrong occurrence', 'select throws', 'sync rejects', 'select ignored']) {
+  test(`real Player Previous remaps a cached range: ${stale}`, async () => {
+    const f = await playbackFixture();
+    f.player.next();
+    await f.reader.queue;
+    assertSelection(f, 2);
+    const cached = f.reader.matches.get(1);
+    if (stale === 'wrong occurrence') {
+      // Same text, but the first occurrence is before the reading start.
+      cached.start = 0;
+      cached.end = 'This sentence appears twice in the document.'.length;
+    } else if (stale === 'select throws') {
+      cached.select = () => { throw Error('InvalidObjectPath'); };
+    } else if (stale === 'select ignored') {
+      cached.select = () => {};
+    } else {
+      let failed = false;
+      f.context.sync = async () => { if (!failed) { failed = true; throw Error('InvalidObjectPath at sync'); } };
+    }
+    f.player.previous();
+    await f.reader.queue;
+    assertSelection(f, 1);
+    assert.equal(f.reader.lastHighlight.method, 'remapped');
+    assert.ok(f.reader.lastHighlight.error);
+  });
+}
+test('real Player Next/Previous crosses the paragraph and split long sentence', async () => {
+  const f = await playbackFixture();
+  assertSelection(f, 1);
+  for (const index of [2, 3, 2, 1, 2, 3]) {
+    if (index > f.player.index) f.player.next();
+    else f.player.previous();
+    await f.reader.queue;
+    assertSelection(f, index);
+  }
+});
+test('highlight failures remain visible and a later request recovers', async () => {
+  const f = await playbackFixture();
+  f.reader.matches.get(1).select = () => { throw Error('cached proxy invalid'); };
+  const sync = f.context.sync;
+  f.context.sync = async () => { throw Error('Word unavailable'); };
+  await f.reader.highlight(1, f.chunks[1], false);
+  assert.deepEqual(f.reader.lastHighlight, { index: 1, method: 'not-found', error: 'Word unavailable' });
+  f.context.sync = sync;
+  await f.reader.highlight(1, f.chunks[1], false);
+  assertSelection(f, 1);
+});
+
+test('a fresh selection ignored once is remapped and verified again', async () => {
+  const f = await playbackFixture();
+  const previous = f.selections.at(-1);
+  let first = true;
+  const getSelection = f.context.document.getSelection;
+  f.context.document.getSelection = () => {
+    if (first) {
+      first = false;
+      const range = getSelection();
+      range.start = previous[0]; range.end = previous[1];
+      return range;
+    }
+    return getSelection();
+  };
+  f.player.next();
+  await f.reader.queue;
+  assertSelection(f, 2);
+  assert.equal(f.reader.lastHighlight.method, 'remapped');
+  assert.ok(f.reader.lastHighlight.error);
 });

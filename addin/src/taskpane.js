@@ -7,6 +7,37 @@ import { splitSentences } from './lib/splitter.js';
 import { filterVoices, pickDefault, buildFallbackOrder } from './lib/voices.js';
 import { loadSettings, saveSettings, normalizeRate } from './lib/settings.js';
 import { WordReader } from './word.js';
+// Register document shortcuts before settings, voices, or asynchronous setup can fail.
+if (window.Office)
+  Office.onReady(() => {
+    try {
+      if (Office.actions?.associate) {
+        const actions = {
+          TogglePlayPause: toggle,
+          Stop: stop,
+          Next: () => player.next(),
+          Previous: () => player.previous(),
+          SpeedUp: () => changeRate(settings.rate + 0.1),
+          SpeedDown: () => changeRate(settings.rate - 0.1),
+        };
+        for (const [name, action] of Object.entries(actions)) {
+          Office.actions.associate(name, async () => {
+            try {
+              await action();
+            } catch {
+              status('Please try that control again.');
+            }
+          });
+        }
+      }
+      Office.addin?.onVisibilityModeChanged?.((event) => {
+        if (event.visibilityMode !== Office.VisibilityMode.taskpane) stop();
+      });
+    } catch {
+      /* Pane controls remain available on older Office builds. */
+    }
+  });
+
 const elements = {};
 for (const id of [
   'play',
@@ -41,7 +72,9 @@ elements.version.textContent = `Read Aloud+ v${VERSION}`;
 /** Keep the last read decision available without exposing document text. */
 function diagnostics() {
   elements.diagnostics.textContent = `Version ${VERSION}; start: ${reader.lastStartMethod || 'not read yet'}`
-    + (reader.lastStartError ? `; error: ${reader.lastStartError}` : '');
+    + (reader.lastStartError ? `; error: ${reader.lastStartError}` : '')
+    + (reader.lastHighlight ? `; highlight: ${reader.lastHighlight.index + 1} ${reader.lastHighlight.method}`
+      + (reader.lastHighlight.error ? ` (${reader.lastHighlight.error})` : '') : '');
 }
 diagnostics();
 let voices = [];
@@ -89,7 +122,7 @@ const player = new Player({
   onChunkStart(index) {
     elements.now.textContent = player.chunks[index];
     status(`Reading sentence ${index + 1} of ${player.chunks.length}`);
-    void reader.highlight(index, player.chunks[index], settings.highlight);
+    void Promise.resolve(reader.highlight(index, player.chunks[index], settings.highlight)).then(diagnostics);
   },
   /** Keep controls and temporary document formatting consistent with player state. */
   onStateChange(state) {
@@ -179,7 +212,7 @@ async function play() {
       void reader.cleanup();
       return;
     }
-    const chunks = splitSentences(text, 300).filter((chunk) => chunk.trim());
+    const chunks = splitSentences(text, 300);
     reader.chunks = chunks;
     player.setChunks(chunks);
     updateFallback();
@@ -225,7 +258,7 @@ elements.yellow.addEventListener('change', () => {
   settings.highlight = elements.yellow.checked;
   persist();
   if (player.state === 'playing')
-    void reader.highlight(player.index, player.chunks[player.index], settings.highlight);
+    void Promise.resolve(reader.highlight(player.index, player.chunks[player.index], settings.highlight)).then(diagnostics);
   else void reader.clearHighlight();
 });
 // Form controls retain their normal Space/arrow keys; Escape always stops.
@@ -254,6 +287,7 @@ document.addEventListener('keydown', (event) => {
     actions[event.key]();
   }
 });
+if (window.Office) Office.onReady(() => { ready = true; });
 changeRate(settings.rate);
 if (synth) {
   synth.addEventListener('voiceschanged', refreshVoices);
@@ -262,37 +296,6 @@ if (synth) {
 } else {
   status('Speech is unavailable in this pane. Please update Windows and Microsoft 365.');
 }
-// Unsupported shortcut/lifecycle APIs must never prevent ordinary pane operation.
-if (window.Office)
-  Office.onReady(() => {
-    ready = true;
-    try {
-      if (Office.actions?.associate) {
-        const actions = {
-          TogglePlayPause: toggle,
-          Stop: stop,
-          Next: () => player.next(),
-          Previous: () => player.previous(),
-          SpeedUp: () => changeRate(settings.rate + 0.1),
-          SpeedDown: () => changeRate(settings.rate - 0.1),
-        };
-        for (const [name, action] of Object.entries(actions)) {
-          Office.actions.associate(name, async () => {
-            try {
-              await action();
-            } catch {
-              status('Please try that control again.');
-            }
-          });
-        }
-      }
-      Office.addin?.onVisibilityModeChanged?.((event) => {
-        if (event.visibilityMode !== Office.VisibilityMode.taskpane) stop();
-      });
-    } catch {
-      /* Pane controls remain available on older Office builds. */
-    }
-  });
 // Best effort only: shared-runtime visibility cleanup above is more dependable.
 window.addEventListener('pagehide', stop);
 // Office and this pane need the network on the first visit; caching helps later visits.

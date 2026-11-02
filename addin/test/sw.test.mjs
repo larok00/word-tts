@@ -77,3 +77,10 @@ test('install reloads precache requests and tolerates unavailable Office CDN', a
   assert.ok(f.precached.length);
   assert.ok(f.precached.every((request) => request.cache === 'reload'));
 });
+
+test('unversioned taskpane.html is served offline', async () => {
+  const f = fixture(async () => { throw Error('offline'); });
+  const result = await request(f, 'https://example.test/taskpane.html');
+  assert.equal(result.response, f.cached);
+  assert.equal(f.matches[0][0].url, 'https://example.test/taskpane.html');
+});

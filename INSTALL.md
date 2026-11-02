@@ -23,7 +23,7 @@ over HTTPS. It's hosted on **GitHub Pages from this (public) repo**:
 
 ### Publishing an update (no reinstall needed)
 After an update, fully close Word and reopen it. The pane footer shows the running
-version (for example **Read Aloud+ v1.0.2**); check it before testing. App files use
+version (for example **Read Aloud+ v1.0.3**); check it before testing. App files use
 network-first caching with an offline fallback:
 ```bash
 cd addin
@@ -32,7 +32,7 @@ BASE_URL=https://larok00.github.io/word-tts CONFIRM=yes ./scripts/publish-public
 This tests, builds and pushes `dist/` as a new commit on `gh-pages`, and Pages
 redeploys within about a minute. Only a change to the **manifest** (name, icons,
 buttons, shortcuts, permissions, URL) needs a new zip and a reinstall. Set the release
-`version` in `addin/package.json`; the build stamps the manifest, pane and asset URLs.
+`version` in `addin/package.json`; the build stamps the manifest Version and pane assets; manifest URLs stay stable.
 
 ### Rebuilding the install zip
 ```bash
@@ -100,7 +100,8 @@ Close Word, double-click `uninstall.cmd` from the same folder.
 | Problem | Fix |
 |---|---|
 | Panel says it can't load / is blank | Check internet (the very first load needs it). Close and reopen Word. If it persists, re-run `install.cmd` and answer **Y** to clear the cache. |
-| Old behaviour after an update | Fully close Word and reopen it. Check the version in the pane footer; expand Diagnostics to report the version, start method and any error. Reinstall the new manifest if the footer is still old. |
+| Old behaviour after an update | Fully close Word and reopen it. Check the version in the pane footer; expand Diagnostics to report the version, start method, highlight outcome and any error. Reinstall the new manifest if the footer is still old. |
+| “Failed to install or load a required resource” / “This add-in is no longer available” | After updating, fully close Word, delete the contents of `%LOCALAPPDATA%\Microsoft\Office\16.0\Wef\` (Office’s add-in cache; safe to clear, it is rebuilt), and reopen Word. |
 | No voices listed | Add a voice (B3), restart Word. |
 | Speech stops in the middle | It should recover by itself (it retries, then switches voice). Press Play again. Tell Koral which voice was selected. |
 | Shortcuts do nothing | Open the panel once (Home → Read Aloud+). Shortcuts need Word 2408+. |

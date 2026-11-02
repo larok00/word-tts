@@ -28,7 +28,7 @@
     </Sets>
   </Requirements>
   <DefaultSettings>
-    <SourceLocation DefaultValue="{{BASE_URL}}/taskpane.html?v={{VERSION}}"/>
+    <SourceLocation DefaultValue="{{BASE_URL}}/taskpane.html"/>
   </DefaultSettings>
   <Permissions>ReadWriteDocument</Permissions>
   <VersionOverrides
@@ -83,7 +83,7 @@
         <bt:Image id="Icon.80" DefaultValue="{{BASE_URL}}/assets/icon-80.png"/>
       </bt:Images>
       <bt:Urls>
-        <bt:Url id="Taskpane.Url" DefaultValue="{{BASE_URL}}/taskpane.html?v={{VERSION}}"/>
+        <bt:Url id="Taskpane.Url" DefaultValue="{{BASE_URL}}/taskpane.html"/>
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="Group.Label" DefaultValue="Read Aloud+"/>
