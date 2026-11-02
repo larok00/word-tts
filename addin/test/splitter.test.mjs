@@ -62,3 +62,14 @@ test('lone UTF-16 surrogates remain lossless', () => {
     for (const max of [1, 3, 300]) laws(text, max, splitSentences(text, max));
   }
 });
+
+
+test('sentence metadata groups long speech chunks and preserves offsets', async () => {
+  const { sentenceChunks } = await import('../src/lib/splitter.js');
+  const text = 'Before. ' + 'Long words '.repeat(40) + 'end. After.';
+  const { chunks, sentenceNumbers, sentenceTexts } = sentenceChunks(text);
+  assert.equal(chunks.join(''), text);
+  assert.equal(sentenceTexts.length, 3);
+  assert.deepEqual(sentenceNumbers, [0, 1, 1, 2]);
+  assert.equal(chunks.filter((_, i) => sentenceNumbers[i] === 1).join(''), sentenceTexts[1]);
+});

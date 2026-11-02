@@ -11,16 +11,18 @@ export class WordReader {
     this.reading = null;
     this.original = null;
     this.yellow = null;
-    this.matches = new Map();
+    this.onEvent = () => {};
     this.chunks = [];
+    this.sentenceNumbers = [];
     this.lastHighlight = null;
     this.lastStartMethod = null;
     this.lastStartError = null;
   }
-  /** Serialize mutations, absorbing Word failures without poisoning later work. */
+  /** Serialize every Word batch; a failed caller never poisons the following work. */
   enqueue(work) {
-    this.queue = this.queue.then(work).catch(() => {});
-    return this.queue;
+    const result = this.queue.then(work);
+    this.queue = result.catch(() => {});
+    return result;
   }
   /** Capture text and track ranges: Office otherwise releases proxies after Word.run ends. */
   async read() {
@@ -28,7 +30,7 @@ export class WordReader {
     this.lastStartError = null;
     this.lastHighlight = null;
     await this.cleanup(false);
-    return Word.run(async (context) => {
+    return this.enqueue(() => Word.run(async (context) => {
       const selection = context.document.getSelection();
       selection.load('text');
       await context.sync();
@@ -42,7 +44,7 @@ export class WordReader {
       this.reading.load('text');
       await context.sync();
       return this.reading.text;
-    });
+    }));
   }
   /** Resolve within the paragraph; unsupported Word operations retain cursor reading. */
   async sentenceStart(context, selection) {
@@ -122,11 +124,17 @@ export class WordReader {
     await context.sync();
     const start = this.reading.getRange('Start');
     const candidates = results.items.map((range) => ({
-      range, prefix: start.expandTo(range.getRange('Start')),
+      // Use a nonempty range even at offset zero; avoid expanding two collapsed points.
+      range, prefix: start.expandTo(range),
     }));
-    for (const candidate of candidates) candidate.prefix.load('text');
+    for (const candidate of candidates) {
+      candidate.prefix.load('text');
+      candidate.range.load('text');
+    }
     await context.sync();
-    return candidates.find(({ prefix }) => prefix.text.length === this.chunkOffset(index))?.range || null;
+    return candidates.find(({ prefix, range }) =>
+      prefix.text.length - range.text.length === this.chunkOffset(index)
+      && range.text === search.replaceAll('^^', '^'))?.range || null;
   }
   /** Verify the visible selection's position as well as its text (duplicates can match). */
   async selectRange(context, range, index, chunk, yellowMode, generation) {
@@ -149,55 +157,65 @@ export class WordReader {
     await context.sync();
     if (generation !== this.generation) return;
     const selection = context.document.getSelection();
-    const prefix = this.reading.getRange('Start').expandTo(selection.getRange('Start'));
+    const prefix = this.reading.getRange('Start').expandTo(selection);
+    const suffix = selection.expandTo(this.reading.getRange('End'));
     selection.load('text');
     prefix.load('text');
+    suffix.load('text');
     await context.sync();
     if (generation !== this.generation) return;
     const expected = mapChunkToSearch(chunk)?.replaceAll('^^', '^');
-    if (prefix.text.length !== this.chunkOffset(index) || selection.text !== expected)
+    if (prefix.text.length - selection.text.length !== this.chunkOffset(index) || selection.text !== expected
+      || prefix.text.length + suffix.text.length - selection.text.length !== this.reading.text.length) {
+      // Clear an unverified selection before retrying; never leave a wrong duplicate lit up.
+      this.original.getRange('Start').select();
+      await context.sync();
       throw new Error('Word selection did not match the chunk offset/text');
+    }
   }
-  /** Retry invalid cached proxies with a fresh search; publish failures for Diagnostics. */
+  /** Coalesce pending requests; retry once in a fresh batch after a host failure. */
   highlight(index, chunk, yellowMode) {
     const generation = ++this.generation;
+    const label = `sentence=${(this.sentenceNumbers[index] ?? index) + 1} chunk=${index + 1}`;
+    this.onEvent(`select request ${label}`);
     return this.enqueue(async () => {
-      if (generation !== this.generation || !this.reading) return;
+      if (generation !== this.generation || !this.reading) {
+        this.onEvent(`select result ${label} superseded`);
+        return;
+      }
       let error = null;
       let method = 'not-found';
       // Also retry a fresh range if Word ignores its first selection request.
       for (let attempt = 0; attempt < 2; attempt++) {
         if (generation !== this.generation) return;
-        const cached = attempt === 0 ? this.matches.get(index) : null;
-        method = cached ? 'cached' : 'remapped';
+        method = 'position-search';
+        this.onEvent(`select ${label} method=${method} retry=${attempt}`);
         try {
           // A failed Office batch may contain invalid proxies; retry in a new batch.
           await Word.run(this.reading, async (context) => {
             await this.restoreYellow(context);
             if (generation !== this.generation) return;
-            const range = cached || await this.mapIndex(context, index, chunk);
+            const range = await this.mapIndex(context, index, chunk);
             if (generation !== this.generation) return;
             if (!range) {
               method = 'not-found';
+              this.original.getRange('Start').select();
+              await context.sync();
               return;
-            }
-            if (!cached) {
-              const old = this.matches.get(index);
-              if (old) {
-                try { old.untrack(); } catch { /* Invalid proxies may already be released. */ }
-              }
-              range.track();
-              this.matches.set(index, range);
             }
             await this.selectRange(context, range, index, chunk, yellowMode, generation);
           });
           break;
         } catch (caught) {
           method = 'not-found';
-          error = caught.message || String(caught);
+          error = [caught.code, caught.message].filter(Boolean).join(': ') || String(caught);
+          this.onEvent(`select ${label} method=position-search error=${error} retry=${attempt}`);
         }
       }
-      if (generation === this.generation) this.lastHighlight = { index, method, error };
+      if (generation === this.generation) {
+        this.lastHighlight = { index, method, error };
+        this.onEvent(`select result ${label} method=${method} error=${error || 'none'}`);
+      } else this.onEvent(`select result ${label} superseded`);
     });
   }
   /** Error/finish restores yellow without discarding navigation or the selection bookmark. */
@@ -206,7 +224,7 @@ export class WordReader {
     return this.enqueue(() => {
       const anchor = this.reading || this.original;
       if (anchor) return Word.run(anchor, (context) => this.restoreYellow(context));
-    });
+    }).catch((error) => this.onEvent(`clear highlight error=${error.message || error}`));
   }
   /** Release every tracked range, optionally restoring the user's original selection. */
   cleanup(restoreSelection = true) {
@@ -216,8 +234,6 @@ export class WordReader {
       await Word.run(this.reading || this.original, async (context) => {
         await this.restoreYellow(context);
         if (restoreSelection && this.original) this.original.select();
-        for (const range of this.matches.values()) if (range) range.untrack();
-        this.matches.clear();
         if (this.reading) this.reading.untrack();
         if (this.original) this.original.untrack();
         this.reading = null;
@@ -225,6 +241,6 @@ export class WordReader {
         this.chunks = [];
         await context.sync();
       });
-    });
+    }).catch((error) => this.onEvent(`cleanup error=${error.message || error}`));
   }
 }

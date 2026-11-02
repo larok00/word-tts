@@ -62,9 +62,12 @@
         Offline voices work without a speech service. The first visit needs a network connection to
         load this add-in and Office.
       </p>
-      <details class="small">
+      <details class="small" id="diagnosticsPanel">
         <summary>Diagnostics</summary>
         <p id="diagnostics">Version {{VERSION}}; start: not read yet</p>
+        <button id="copyLog" type="button">Copy log</button>
+        <span id="copyResult" role="status"></span>
+        <pre id="eventLog" style="white-space: pre-wrap; overflow-wrap: anywhere"></pre>
       </details>
       <footer id="version" class="small">Read Aloud+ v{{VERSION}}</footer>
     </main>

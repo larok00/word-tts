@@ -383,3 +383,88 @@ Windows retesting of the load error, shortcuts and selection recovery remains.
 Round-5 Windows test prompt: `testing/windows-e2e-round5-codex-prompt.md` (uses
 `testing/fixtures/sample.docx` and `sample-long.docx`). Before round 5, run
 `install.cmd` from the v1.0.3 zip so the new manifest is in place.
+
+## Windows test round 5 (2026-11-02)
+
+Real Windows tested **v1.0.3**. Passes: no load errors, P/Up/Down/X shortcuts,
+sentence-start reading (including “after” in sample-long.docx), and Pause/Stop
+buttons and shortcuts. The changes below prepare **v1.0.4**; they have been
+verified locally, **not in real Word for Windows**.
+
+- **1 — Previous counted speech chunks. Confirmed root cause:** the pane passed
+  `splitSentences(text, 300)` directly to the player, navigation and status. The
+  long sample sentence occupies two chunks, so moving backward one chunk can
+  stay in that sentence. JS now first splits without a speech-length limit, then
+  chunks each sentence, keeping a sentence number for every chunk and preserving
+  exact text/offsets. Status counts sentences and Now reading shows the whole
+  sentence. Previous always starts sentence N−1, with **no restart-current grace**;
+  Next starts N+1, both clamped at the ends. Speech still advances through all
+  chunks naturally. No stale separate navigation index was found: the player's
+  current chunk index is updated synchronously. The existing attempt-token guard
+  invalidates callbacks before cancel; tests now deliver end/error from cancel
+  both synchronously and asynchronously during Previous and Next. Tests also
+  load real sample.docx text and check Previous from either long-sentence chunk
+  onto the second copy of the repeated sentence, including pending Word work.
+- **2 — Word batching/cache:** `read()` previously waited for queued cleanup but
+  then called Word.run outside the queue, leaving a path for overlapping batches.
+  All Word.run calls now go through one queue, including reading/sentenceStart,
+  selection, yellow restore and cleanup. Superseded pending highlights skip Word
+  entirely; generation checks also protect in-flight work. Cached search-result
+  proxies have been removed: each active highlight maps fresh in its own batch,
+  with one retry after an exception (including GeneralException). Prefix mapping
+  and selection verification now expand through a nonempty range and subtract
+  its text length, avoiding expansion between identical collapsed points at
+  offset zero. The old ranges were already `.track()`ed; missing tracking was
+  **not** established as the cause. Also, `remapped` on a first visit was normal:
+  that index had no cached range yet. Thus the screenshots alone cannot prove
+  cache failure. The exact real-host GeneralException trigger remains unverified;
+  Diagnostics now says `position-search` and logs each attempt, retry and error.
+- **3 — repeated fillers:** round 4 already searched by expected prefix length,
+  rather than taking the first text match. We retain that position requirement
+  with fresh ranges, additionally check match text, and verify visible selection
+  text, offset and containment in the reading range. A mismatched selection is
+  collapsed to the original bookmark before retry; a missing match also clears
+  the old selection and reports `not-found`. Tests use 90 identical fillers with
+  skipped/reverse requests and persistent wrong-duplicate selection. This
+  addresses stale selection/batch failure paths without claiming the Windows
+  symptom was reproduced on Linux. The existing long-chunk selection prefix
+  limit (up to 250 escaped search characters) remains.
+- **4 — cold Home button:** reviewed the task-pane VersionOverrides V1_0,
+  OfficeTab TabHome, unique Group/Control/resource IDs, packaged icons,
+  SharedRuntime 1.1, long Runtime and shared FunctionFile URL. No concrete
+  manifest defect was identified. A V1_1 override is not a justified fix for this
+  Word task-pane manifest; the manifest is unchanged apart from the build's
+  Version 1.0.4.0. There is no AutoShow/startup code. Considered
+  `Office.addin.setStartupBehavior(load)` after first open, but it requires an
+  already activated runtime and cannot guarantee cold command registration;
+  automatic startup is therefore not enabled. The tested developer-registry
+  sideload required Home → Add-ins → Developer Add-ins → Read Aloud+ once before
+  its Home button appeared. INSTALL.md now leads with those steps and explains
+  they may be needed after each cold open. Whether this is inherent to that Word
+  build's registry sideloading remains unconfirmed; **no cold-start fix or new
+  Windows result is claimed**. Cache clearing did not solve it in round 5.
+- **5 — event log:** Diagnostics keeps a 40-entry circular buffer with elapsed ms
+  and local HH:MM:SS.mmm. It records commands with source and before/after sentence
+  numbers, utterance start/end/error/cancel/pause/resume, select requests/results
+  with sentence/chunk, method/error/retry, and changed status text. Raw canceled
+  utterance events remain visible even when the player correctly ignores them.
+  Command and engine timestamps expose pause/cancel latency. Log rendering happens
+  only while Diagnostics is open (or when opened); logging makes no Word calls.
+  Copy log includes version, summary and events, tries navigator.clipboard then
+  textarea/execCommand, and reports Copied or an error. Tests cover timing/cap,
+  button/shortcut logging, hidden rendering, summary copying and fallback failures.
+
+Local verification: **130 JS tests passed, 0 failed** with
+`cd addin && node --test --test-isolation=none test/*.test.mjs`.
+`BASE_URL=https://larok00.github.io/word-tts npm run build` passed.
+`~/.bend/bin/bend bend/splitter_test.bend`: **27 passed, 0 failed**.
+The packaged `addin/dist/install/manifest.xml` has Version **1.0.4.0** and the
+same URL sequence as v1.0.3, with no query strings. **No bend/ source changed**;
+the regenerated compiled splitter is unchanged. No network, commit, push or git
+configuration changes were made. Windows retesting is still needed for desktop
+range reliability, latency, clipboard and cold ribbon activation.
+
+**Released v1.0.4 (2026-11-02):** published to gh-pages, GitHub release v1.0.4 with
+`read-aloud-plus-install.zip` (manifest URLs unchanged, Version 1.0.4.0). Codex prompt:
+`agent-prompts/07-round5-fixes.md`. Next Windows retest:
+`testing/windows-e2e-round6-codex-prompt.md` (judged mainly from the Diagnostics event log).

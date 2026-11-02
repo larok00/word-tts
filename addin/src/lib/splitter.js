@@ -22,3 +22,25 @@ export function splitSentences(text, max = 300) {
   }
   return chunks;
 }
+
+/** Keep speech chunks lossless while giving every part its sentence identity. */
+export function sentenceChunks(text, max = 300) {
+  const sentences = splitSentences(text, Number.MAX_SAFE_INTEGER);
+  const chunks = [];
+  const sentenceNumbers = [];
+  const sentenceTexts = [];
+  for (const sentence of sentences) {
+    // Whitespace belongs to the preceding sentence and still contributes offsets.
+    const number = sentenceTexts.length;
+    if (!sentence.trim()) {
+      if (chunks.length) chunks[chunks.length - 1] += sentence;
+      continue;
+    }
+    sentenceTexts.push(sentence);
+    for (const chunk of splitSentences(sentence, max)) {
+      chunks.push(chunk);
+      sentenceNumbers.push(number);
+    }
+  }
+  return { chunks, sentenceNumbers, sentenceTexts };
+}

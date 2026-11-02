@@ -23,7 +23,7 @@ over HTTPS. It's hosted on **GitHub Pages from this (public) repo**:
 
 ### Publishing an update (no reinstall needed)
 After an update, fully close Word and reopen it. The pane footer shows the running
-version (for example **Read Aloud+ v1.0.3**); check it before testing. App files use
+version (for example **Read Aloud+ v1.0.4**); check it before testing. App files use
 network-first caching with an offline fallback:
 ```bash
 cd addin
@@ -59,11 +59,21 @@ cd addin && npm ci && BASE_URL=https://larok00.github.io/word-tts npm run build 
      per-user setting, and it doesn't need administrator rights.
    - Press a key when asked. When it asks *"Clear cache? [Y/N]"*, press **N**
      (only press Y if the add-in doesn't show up later).
-4. Open Word. On the **Home** tab, at the right-hand end, click **Read Aloud+**.
+4. Open Word. Choose **Home → Add-ins → Developer Add-ins → Read Aloud+**.
+   On the tested PC, this activation makes the Home-tab Read Aloud+ button appear.
+   If the button is already there, you can click it directly.
    - Don't see it? Click **Home → Add-ins** (or **Insert → Get Add-ins → My Add-ins**),
      look under **Developer Add-ins**, and pick **Read Aloud+**.
    - The first time, Word may ask whether to trust/start the add-in: choose yes.
 5. The Read Aloud+ panel opens on the right.
+
+**Home button missing after restarting Word:** the round-5 Windows test found that
+this developer-registry installation did not show its Home button until the add-in
+was opened once. Use **Home → Add-ins → Developer Add-ins → Read Aloud+** again
+after a cold open if needed. Clearing the Wef cache did not fix this in that test.
+The manifest review found no definite fix; v1.0.4 has not been retested on Windows.
+Automatic startup has not been enabled: it runs only after Office activates the
+add-in, so it cannot guarantee the missing ribbon button appears.
 
 ### B2. Use it
 - Select some text, or just click where you want to start, then press **▶ Play**.
@@ -96,12 +106,23 @@ Close Word, double-click `uninstall.cmd` from the same folder.
 
 ---
 
+## Reporting a reading problem
+
+Open **Diagnostics** in the pane and click **Copy log**. When it says **Copied**,
+paste it into your message to Koral. It includes the version, start/highlight summary
+and the last 40 events, with elapsed milliseconds and clock time. Commands show
+button/shortcut, and sentence numbers before and after; speech and selection events
+help explain delays. Highlight diagnostics explicitly label the internal chunk
+number; one long sentence can have several chunks. If copying fails, the error
+appears beside the button; select and copy the visible log manually.
+
 ## Troubleshooting
 | Problem | Fix |
 |---|---|
 | Panel says it can't load / is blank | Check internet (the very first load needs it). Close and reopen Word. If it persists, re-run `install.cmd` and answer **Y** to clear the cache. |
 | Old behaviour after an update | Fully close Word and reopen it. Check the version in the pane footer; expand Diagnostics to report the version, start method, highlight outcome and any error. Reinstall the new manifest if the footer is still old. |
 | “Failed to install or load a required resource” / “This add-in is no longer available” | After updating, fully close Word, delete the contents of `%LOCALAPPDATA%\Microsoft\Office\16.0\Wef\` (Office’s add-in cache; safe to clear, it is rebuilt), and reopen Word. |
+| Home button missing on a cold open | Open Home → Add-ins → Developer Add-ins → Read Aloud+ once. This was required on the round-5 test PC. |
 | No voices listed | Add a voice (B3), restart Word. |
 | Speech stops in the middle | It should recover by itself (it retries, then switches voice). Press Play again. Tell Koral which voice was selected. |
 | Shortcuts do nothing | Open the panel once (Home → Read Aloud+). Shortcuts need Word 2408+. |
@@ -114,7 +135,8 @@ a real Windows + Word session:
   that sandbox do not reach the real system; the test install had to be redone outside.
 - Start Word normally. COM automation (`/Automation -Embedding`) does not load add-ins.
 - [ ] After updating, fully close and reopen Word; check the pane footer version and Diagnostics.
-- [ ] Install via `install.cmd`; the Home-tab button appears.
+- [ ] Install via `install.cmd`; check the Home button on a cold open, then activate via Developer Add-ins if missing.
+- [ ] Diagnostics → Copy log copies the version, summary and timed events.
 - [ ] Voices list shows Windows voices marked (offline); Play speaks.
 - [ ] Pause/Resume/Stop/Prev/Next and the speed controls work while speaking.
 - [ ] Sentence selection follows speech (try repeated sentences and long ones).

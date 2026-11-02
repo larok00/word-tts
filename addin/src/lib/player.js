@@ -8,13 +8,14 @@ export class Player {
     engine,
     chunks = [],
     voices = [],
+    sentenceNumbers = [],
     clock = globalThis,
     onChunkStart = () => {},
     onInvalidate = () => {},
     onStateChange = () => {},
     onError = () => {},
   }) {
-    Object.assign(this, { engine, chunks, voices, clock, onChunkStart, onInvalidate, onStateChange, onError });
+    Object.assign(this, { engine, chunks, sentenceNumbers, voices, clock, onChunkStart, onInvalidate, onStateChange, onError });
     this.state = 'idle';
     this.index = 0;
     this.rate = 1;
@@ -51,9 +52,10 @@ export class Player {
     }
   }
   /** Replace content for a new document selection. */
-  setChunks(chunks) {
+  setChunks(chunks, sentenceNumbers = []) {
     this.stop();
     this.chunks = chunks;
+    this.sentenceNumbers = sentenceNumbers;
     this.index = 0;
   }
   /** Begin at a requested sentence, skipping chunks containing only whitespace. */
@@ -173,16 +175,23 @@ export class Player {
     this.cancel();
     this.setState('stopped');
   }
-  /** Navigation starts the requested sentence, clamped to document boundaries. */
-  next() {
-    if (this.chunks.length) this.play(Math.min(this.index + 1, this.chunks.length - 1));
+  /** Chunk indexes remain internal; controls and status use sentence identities. */
+  sentenceIndex(index = this.index) {
+    const chunk = Math.min(index, this.chunks.length - 1);
+    return this.sentenceNumbers[chunk] ?? chunk;
   }
-  /** Walk backward past whitespace-only chunks. */
-  previous() {
-    let index = Math.max(0, this.index - 1);
-    while (index > 0 && !this.chunks[index].trim()) index--;
-    if (this.chunks.length) this.play(index);
+  get sentenceCount() {
+    return this.chunks.length ? this.sentenceIndex(this.chunks.length - 1) + 1 : 0;
   }
+  /** Always go to N±1, even from the second chunk; no restart-current grace. */
+  navigate(delta) {
+    if (!this.chunks.length) return;
+    const target = Math.max(0, Math.min(this.sentenceIndex() + delta, this.sentenceCount - 1));
+    const index = this.chunks.findIndex((_, i) => this.sentenceIndex(i) === target && this.chunks[i].trim());
+    this.play(index < 0 ? 0 : index);
+  }
+  next() { this.navigate(1); }
+  previous() { this.navigate(-1); }
   /** SpeechSynthesis cannot change an existing utterance's rate reliably. */
   setRate(rate) {
     this.rate = normalizeRate(rate);

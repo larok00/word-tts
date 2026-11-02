@@ -244,3 +244,29 @@ test('repeated Previous ignores all late callbacks from cancelled utterances', (
   }
   assert.deepEqual(f.starts, [3, 2, 1, 0]);
 });
+
+for (const direction of ['previous', 'next']) {
+  for (const callback of ['onend', 'onerror']) {
+    for (const async of [false, true]) {
+      test(`${direction} ignores cancel ${callback}, async=${async}, from both long chunks`, async () => {
+        for (const start of [1, 2]) {
+          const f = fixture({ chunks: ['Before.', 'Long first ', 'long second.', 'After.'], sentenceNumbers: [0, 1, 1, 2] });
+          f.player.play(start);
+          const old = f.current();
+          let pending;
+          f.engine.cancel = () => {
+            const emit = () => old[callback]({ error: 'network' });
+            if (async) pending = Promise.resolve().then(emit);
+            else emit();
+          };
+          f.player[direction]();
+          await pending;
+          assert.equal(f.player.sentenceIndex(), direction === 'previous' ? 0 : 2);
+          assert.equal(f.player.index, direction === 'previous' ? 0 : 3);
+          assert.equal(f.player.state, 'playing');
+          assert.equal(f.engine.utterances.length, 2);
+        }
+      });
+    }
+  }
+}

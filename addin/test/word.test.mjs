@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { Player } from '../src/lib/player.js';
-import { splitSentences } from '../src/lib/splitter.js';
+import { splitSentences, sentenceChunks } from '../src/lib/splitter.js';
 import { mapChunkToSearch } from '../src/lib/mapping.js';
 import { WordReader } from '../src/word.js';
 /** Emulate context ownership and literal range search without importing Office. */
@@ -165,9 +165,9 @@ test('stale queued requests are discarded and errors leave the queue usable', as
   const second = reader.highlight(1, 'Two.', false);
   await Promise.all([first, second]);
   assert.deepEqual(f.selections, [[5, 9]]);
-  await reader.enqueue(() => {
+  await assert.rejects(reader.enqueue(() => {
     throw Error('Word unavailable');
-  });
+  }));
   await reader.cleanup();
   assert.equal(f.tracked.size, 0);
 });
@@ -250,7 +250,6 @@ for (const yellow of [false, true]) {
       return new Promise((resolve) => { release = resolve; });
     };
     // Yellow loads its colour before changing it; selection holds the mapping sync.
-    if (!yellow) reader.matches.delete(3);
     const old = reader.highlight(3, 'Four.', yellow);
     await waiting;
     reader.invalidate();
@@ -305,7 +304,7 @@ async function playbackFixture() {
   const f = documentFixture(sampleText, caret, caret);
   const reader = new WordReader();
   const text = await reader.read();
-  const chunks = splitSentences(text, 300);
+  const { chunks, sentenceNumbers } = sentenceChunks(text, 300);
   assert.equal(chunks.join(''), text);
   assert.equal(chunks.length, 4);
   assert.ok(chunks[1].includes('appears twice'));
@@ -315,7 +314,7 @@ async function playbackFixture() {
   const player = new Player({
     engine: { cancel() {}, resume() {}, speak: (u) => utterances.push(u) },
     clock: { setTimeout() {}, clearTimeout() {} },
-    chunks,
+    chunks, sentenceNumbers,
     onInvalidate: () => reader.invalidate(),
     onChunkStart(index) { now = chunks[index]; void reader.highlight(index, chunks[index], false); },
   });
@@ -360,45 +359,61 @@ for (const pendingAt of ['search', 'select']) {
     assertSelection(f, 1);
   });
 }
-for (const stale of ['wrong occurrence', 'select throws', 'sync rejects', 'select ignored']) {
-  test(`real Player Previous remaps a cached range: ${stale}`, async () => {
+for (const failure of ['select throws', 'sync rejects', 'select ignored']) {
+  test(`fresh position selection retries once: ${failure}`, async () => {
     const f = await playbackFixture();
     f.player.next();
     await f.reader.queue;
     assertSelection(f, 2);
-    const cached = f.reader.matches.get(1);
-    if (stale === 'wrong occurrence') {
-      // Same text, but the first occurrence is before the reading start.
-      cached.start = 0;
-      cached.end = 'This sentence appears twice in the document.'.length;
-    } else if (stale === 'select throws') {
-      cached.select = () => { throw Error('InvalidObjectPath'); };
-    } else if (stale === 'select ignored') {
-      cached.select = () => {};
+    let first = true;
+    if (failure === 'sync rejects') {
+      f.context.sync = async () => { if (first) { first = false; throw Error('GeneralException'); } };
     } else {
-      let failed = false;
-      f.context.sync = async () => { if (!failed) { failed = true; throw Error('InvalidObjectPath at sync'); } };
+      f.context.select = (range) => {
+        if (first) {
+          first = false;
+          if (failure === 'select throws') throw Error('GeneralException');
+          return;
+        }
+        f.selections.push(range);
+      };
+      // Ignore the actual selection too, once, rather than just its visible record.
+      if (failure === 'select ignored') {
+        const getSelection = f.context.document.getSelection;
+        f.context.document.getSelection = () => {
+          if (!first) { f.context.document.getSelection = getSelection; return new f.context.document.body.constructor(0, 0); }
+          return getSelection();
+        };
+      }
     }
     f.player.previous();
     await f.reader.queue;
     assertSelection(f, 1);
-    assert.equal(f.reader.lastHighlight.method, 'remapped');
+    assert.equal(f.reader.lastHighlight.method, 'position-search');
     assert.ok(f.reader.lastHighlight.error);
   });
 }
-test('real Player Next/Previous crosses the paragraph and split long sentence', async () => {
-  const f = await playbackFixture();
-  assertSelection(f, 1);
-  for (const index of [2, 3, 2, 1, 2, 3]) {
-    if (index > f.player.index) f.player.next();
-    else f.player.previous();
+for (const chunk of [2, 3]) {
+  test(`Previous from real long sentence chunk ${chunk} selects the repeated sentence`, async () => {
+    const f = await playbackFixture();
+    f.player.play(chunk);
     await f.reader.queue;
-    assertSelection(f, index);
-  }
-});
+    assertSelection(f, chunk);
+    assert.equal(f.player.sentenceIndex(), 2);
+    assert.equal(f.player.sentenceCount, 3);
+    f.player.previous();
+    await f.reader.queue;
+    assert.equal(f.player.sentenceIndex(), 1);
+    assert.equal(f.player.index, 1);
+    assertSelection(f, 1);
+    f.player.next();
+    await f.reader.queue;
+    assert.equal(f.player.index, 2);
+    assertSelection(f, 2);
+  });
+}
 test('highlight failures remain visible and a later request recovers', async () => {
   const f = await playbackFixture();
-  f.reader.matches.get(1).select = () => { throw Error('cached proxy invalid'); };
   const sync = f.context.sync;
   f.context.sync = async () => { throw Error('Word unavailable'); };
   await f.reader.highlight(1, f.chunks[1], false);
@@ -425,6 +440,72 @@ test('a fresh selection ignored once is remapped and verified again', async () =
   f.player.next();
   await f.reader.queue;
   assertSelection(f, 2);
-  assert.equal(f.reader.lastHighlight.method, 'remapped');
+  assert.equal(f.reader.lastHighlight.method, 'position-search');
   assert.ok(f.reader.lastHighlight.error);
+});
+
+test('many identical fillers map to exact positions after skipped and reverse requests', async () => {
+  const filler = 'Reading aloud should feel smooth and steady.';
+  const text = 'Intro. ' + Array(90).fill(filler).join(' ') + ' Tail.';
+  const f = documentFixture(text, 0, text.length);
+  const reader = new WordReader();
+  await reader.read();
+  reader.chunks = splitSentences(text, 300);
+  for (const index of [70, 2, 80, 40, 39, 3]) {
+    await reader.highlight(index, reader.chunks[index], false);
+    const start = reader.chunks.slice(0, index).join('').length;
+    assert.deepEqual(f.selections.at(-1), [start, start + filler.length]);
+    assert.equal(reader.lastHighlight.method, 'position-search');
+  }
+  await reader.cleanup();
+  assert.equal(f.tracked.size, 0);
+});
+
+test('reading, highlighting, restore and cleanup share one Word queue', async () => {
+  const f = documentFixture('One. Two.', 0, 9);
+  const run = Word.run;
+  let active = 0, runs = 0;
+  Word.run = async (...args) => {
+    assert.equal(active++, 0, 'Word.run batches must never overlap');
+    runs++;
+    try { await Promise.resolve(); return await run(...args); }
+    finally { active--; }
+  };
+  const reader = new WordReader();
+  const read = reader.read();
+  const clear = reader.clearHighlight();
+  await Promise.all([read, clear]);
+  reader.chunks = ['One. ', 'Two.'];
+  await Promise.all([reader.highlight(0, 'One.', true), reader.highlight(1, 'Two.', true)]);
+  await Promise.all([reader.clearHighlight(), reader.cleanup()]);
+  assert.ok(runs >= 3);
+  assert.equal(f.tracked.size, 0);
+});
+
+test('a persistent wrong duplicate is not-found and its visible selection is cleared', async () => {
+  const f = documentFixture('Same. Same. Same.', 0, 17);
+  const reader = new WordReader();
+  await reader.read();
+  reader.chunks = ['Same. ', 'Same. ', 'Same.'];
+  f.context.document.getSelection = () => new f.context.document.body.constructor(0, 5);
+  await reader.highlight(2, 'Same.', false);
+  assert.equal(reader.lastHighlight.method, 'not-found');
+  assert.match(reader.lastHighlight.error, /offset\/text/);
+  assert.deepEqual(f.selections.at(-1), [0, 0]);
+});
+
+test('position zero mapping never expands two identical collapsed ranges', async () => {
+  const f = documentFixture('One. Two.', 0, 9);
+  const prototype = Object.getPrototypeOf(f.context.document.body);
+  const expand = prototype.expandTo;
+  prototype.expandTo = function(other) {
+    assert.ok(this.start !== this.end || other.start !== other.end || this.start !== other.start);
+    return expand.call(this, other);
+  };
+  const reader = new WordReader();
+  await reader.read();
+  reader.chunks = ['One. ', 'Two.'];
+  await reader.highlight(0, 'One.', false);
+  assert.equal(reader.lastHighlight.method, 'position-search');
+  assert.deepEqual(f.selections.at(-1), [0, 4]);
 });

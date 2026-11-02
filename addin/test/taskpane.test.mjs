@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
+import { EventLog, copyLog } from '../src/lib/event-log.js';
 import { Player } from '../src/lib/player.js';
 const source = (await readFile(new URL('../src/taskpane.js', import.meta.url), 'utf8'))
   .replace(/^import .*;$/gm, '');
@@ -13,6 +14,7 @@ function fixture(failSetup = false, highlightOutcome = null) {
   const utterances = [];
   let voiceChange;
   let reads = 0;
+  let copied;
   let player;
   const voice = { name: 'Local', voiceURI: 'local', localService: true };
   const clock = { setTimeout: () => 1, clearTimeout() {} };
@@ -22,7 +24,7 @@ function fixture(failSetup = false, highlightOutcome = null) {
   };
   try {
   runInNewContext(source, {
-    VERSION: '1.0.3', ...clock, Office: office,
+    VERSION: '1.0.4', EventLog: class extends EventLog { constructor(options) { super({ ...options, now: () => 0 }); } }, copyLog, ...clock, Office: office,
     document: {
       getElementById(id) {
         const handlers = {};
@@ -42,11 +44,11 @@ function fixture(failSetup = false, highlightOutcome = null) {
       addEventListener: (_, callback) => { voiceChange = callback; },
     } },
     SpeechSynthesisUtterance: class { constructor(text) { this.text = text; } },
-    navigator: {},
+    navigator: { clipboard: { writeText: async (text) => { copied = text; } } },
     loadSettings: () => { if (failSetup === 'settings') throw Error('settings unavailable'); return { rate: 1 }; }, saveSettings() {}, normalizeRate: (rate) => rate,
     filterVoices: (voices) => voices, pickDefault: (voices) => voices[0],
     buildFallbackOrder: (voices) => voices,
-    splitSentences: () => ['One.', 'Two.'],
+    sentenceChunks: () => ({ chunks: ['One.', 'Two.'], sentenceNumbers: [0, 1], sentenceTexts: ['One.', 'Two.'] }),
     WordReader: class {
       async read() { reads++; this.lastStartMethod = 'sentence'; return 'One. Two.'; }
       invalidate() {} cleanup() {}
@@ -59,6 +61,7 @@ function fixture(failSetup = false, highlightOutcome = null) {
   });
   } catch (error) { if (!failSetup) throw error; }
   return { elements, actions, utterances, player, voiceChange,
+    copied: () => copied,
     reads: () => reads,
     click: (id) => elements.get(id).handlers.click(),
     space: () => keys.keydown({ key: ' ', target: { closest: () => false }, preventDefault() {} }),
@@ -95,8 +98,8 @@ test('Office Play uses the same document read and diagnostics as the button', as
   await Promise.resolve();
   assert.equal(f.reads(), 1);
   assert.equal(f.player.state, 'playing');
-  assert.equal(f.elements.get('diagnostics').textContent, 'Version 1.0.3; start: sentence');
-  assert.equal(f.elements.get('version').textContent, 'Read Aloud+ v1.0.3');
+  assert.equal(f.elements.get('diagnostics').textContent, 'Version 1.0.4; start: sentence');
+  assert.equal(f.elements.get('version').textContent, 'Read Aloud+ v1.0.4');
 });
 
 for (const failure of ['settings', 'voices']) {
@@ -112,5 +115,47 @@ test('Diagnostics displays the completed highlight outcome and error beside star
   await f.click('play');
   await Promise.resolve();
   assert.equal(f.elements.get('diagnostics').textContent,
-    'Version 1.0.3; start: sentence; highlight: 1 remapped (InvalidObjectPath)');
+    'Version 1.0.4; start: sentence; highlight chunk: 1 remapped (InvalidObjectPath)');
+});
+
+
+test('Diagnostics logs button/shortcut commands, speech and status', async () => {
+  const f = fixture();
+  const panel = f.elements.get('diagnosticsPanel');
+  const view = f.elements.get('eventLog');
+  assert.equal(view.textContent, undefined);
+  panel.open = true;
+  panel.handlers.toggle();
+  await f.click('play');
+  f.utterances.at(-1).onstart();
+  await f.actions.Next();
+  await f.actions.Previous();
+  await f.click('pause');
+  await f.click('pause');
+  await f.click('faster');
+  await f.actions.Stop();
+  assert.match(view.textContent, /command prev source=shortcut before=2 after=1/);
+  assert.match(view.textContent, /utterance cancel/);
+  assert.match(view.textContent, /command pause source=button before=1 after=1/);
+  assert.match(view.textContent, /command resume source=button/);
+  assert.match(view.textContent, /command speed up source=button/);
+  assert.match(view.textContent, /status Stopped/);
+});
+
+
+test('Copy log includes version, summary and raw end/error callbacks, even when closed', async () => {
+  const f = fixture();
+  await f.click('play');
+  f.utterances.at(-1).onstart();
+  const old = f.utterances.at(-1);
+  await f.click('next');
+  old.onend();
+  old.onerror({ error: 'canceled' });
+  await f.click('copyLog');
+  assert.match(f.copied(), /^Version 1.0.4; start: sentence/);
+  assert.match(f.copied(), /utterance start sentence=1 chunk=1/);
+  assert.match(f.copied(), /utterance end sentence=1 chunk=1/);
+  assert.match(f.copied(), /utterance error sentence=1 chunk=1 error=canceled/);
+  assert.equal(f.elements.get('copyResult').textContent, 'Copied');
+  assert.equal(f.elements.get('eventLog').textContent, undefined);
 });
