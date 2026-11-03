@@ -1,0 +1,72 @@
+{
+  "actions": [
+    {
+      "id": "TogglePlayPause",
+      "name": "Play or pause",
+      "type": "ExecuteFunction"
+    },
+    {
+      "id": "Stop",
+      "name": "Stop reading",
+      "type": "ExecuteFunction"
+    },
+    {
+      "id": "Next",
+      "name": "Next sentence",
+      "type": "ExecuteFunction"
+    },
+    {
+      "id": "Previous",
+      "name": "Previous sentence",
+      "type": "ExecuteFunction"
+    },
+    {
+      "id": "SpeedUp",
+      "name": "Increase speed",
+      "type": "ExecuteFunction"
+    },
+    {
+      "id": "SpeedDown",
+      "name": "Decrease speed",
+      "type": "ExecuteFunction"
+    }
+  ],
+  "shortcuts": [
+    {
+      "action": "TogglePlayPause",
+      "key": {
+        "default": "Ctrl+Alt+Shift+P"
+      }
+    },
+    {
+      "action": "Stop",
+      "key": {
+        "default": "Ctrl+Alt+Shift+X"
+      }
+    },
+    {
+      "action": "Next",
+      "key": {
+        "default": "Ctrl+Alt+Shift+Right"
+      }
+    },
+    {
+      "action": "Previous",
+      "key": {
+        "default": "Ctrl+Alt+Shift+Left"
+      }
+    },
+    {
+      "action": "SpeedUp",
+      "key": {
+        "default": "Ctrl+Alt+Shift+Up"
+      }
+    },
+    {
+      "action": "SpeedDown",
+      "key": {
+        "default": "Ctrl+Alt+Shift+Down"
+      }
+    }
+  ]
+}
