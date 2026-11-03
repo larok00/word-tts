@@ -536,3 +536,27 @@ No network, commit, push or git configuration changes were made.
 Only real Word on Windows can confirm which of Krystof's voices emit usable word
 boundaries, what causes text-length drift in his document, and the actual scrolling
 behaviour during reading, Previous, pause/edit, Stop, finish and pane close.
+
+## v1.0.6 release (2026-11-03)
+
+Koral tested the v1.0.6 beta by hand in real Word for Windows (voice Microsoft George
+en-GB): all checks passed, including word-by-word highlighting. The word fix above is
+therefore confirmed on real Word; Krystof's own voices and document are still untested.
+
+- master: merge commit 51730df (fix/krystof-feedback into master, no force push).
+- Root site published with `scripts/publish-public.sh` (gh-pages 2416148). The publisher
+  replaces the whole snapshot, so the temporary `beta/` folder is removed (beta URLs now
+  404). Live root: manifest Version 1.0.6.0, footer "Read Aloud+ v1.0.6", new word.js;
+  every manifest URL and script returns 200 and no manifest URL has a query string.
+- Release: https://github.com/larok00/word-tts/releases/tag/v1.0.6 with
+  `read-aloud-plus-install.zip` (ReadAloudPlus/install.cmd, uninstall.cmd, manifest.xml).
+- Existing installs: the 1.0.4 and 1.0.6 manifests differ **only** in `<Version>`;
+  install.cmd and uninstall.cmd are byte-identical. Every URL (SourceLocation, icons,
+  help, shortcuts, AppDomain) is the same root URL, and the code is fetched from the site,
+  so Krystof does not need to reinstall: fully close and reopen Word. The stale
+  1.0.4.0 Version in his sideloaded manifest is harmless (it only describes the manifest;
+  the footer shows the hosted code's version). If the footer still shows v1.0.4 after a
+  full restart, close Word and clear `%LOCALAPPDATA%\Microsoft\Office\16.0\Wef\`.
+- Koral's PC: `%LOCALAPPDATA%\ReadAloudPlus\manifest.xml` is the v1.0.6 release manifest
+  (root URLs); the beta one is kept as `manifest-beta-1.0.5.xml`, the old one as
+  `manifest-1.0.4.xml` (the registry points only at manifest.xml).
