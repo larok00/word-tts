@@ -53,6 +53,7 @@ for (const id of [
   'voice',
   'offline',
   'yellow',
+  'followWords',
   'status',
   'now',
   'version',
@@ -93,8 +94,11 @@ function diagnostics() {
   elements.diagnostics.textContent = `Version ${VERSION}; start: ${reader.lastStartMethod || 'not read yet'}`
     + (reader.lastStartError ? `; error: ${reader.lastStartError}` : '')
     + (reader.lastHighlight ? `; highlight chunk: ${reader.lastHighlight.index + 1} ${reader.lastHighlight.method}`
-      + (reader.lastHighlight.error ? ` (${reader.lastHighlight.error})` : '') : '');
+      + (reader.lastHighlight.error ? ` (${reader.lastHighlight.error})` : '') : '')
+    + `; word boundaries: ${boundaryVoice === (diagnosticVoice || settings.voiceURI) ? 'seen' : 'not seen'} (current voice)`;
 }
+let boundaryVoice = null;
+let diagnosticVoice = null;
 diagnostics();
 let voices = [];
 let ready = false;
@@ -112,6 +116,7 @@ const engine = {
   current: null,
   /** Wire one browser utterance to Player callbacks and retain it through completion. */
   speak(options) {
+    diagnosticVoice = options.voice?.voiceURI || settings.voiceURI;
     const utterance = new SpeechSynthesisUtterance(options.text);
     utterance.rate = options.rate;
     utterance.voice = options.voice;
@@ -154,6 +159,13 @@ const player = new Player({
     status(`Reading sentence ${player.sentenceIndex(index) + 1} of ${player.sentenceCount}`);
     void Promise.resolve(reader.highlight(index, player.chunks[index], settings.highlight)).then(diagnostics);
   },
+  onWord(index, charIndex, charLength) {
+    const voice = player.voices[player.voiceIndex]?.voiceURI || settings.voiceURI;
+    const changed = boundaryVoice !== voice;
+    boundaryVoice = voice;
+    void reader.wordBoundary(index, charIndex, charLength, settings.followWords !== false);
+    if (changed) diagnostics();
+  },
   /** Keep controls and temporary document formatting consistent with player state. */
   onStateChange(state) {
     elements.pause.disabled = !['playing', 'paused'].includes(state);
@@ -163,7 +175,7 @@ const player = new Player({
     if (state === 'paused') status('Paused. Press Resume to continue.');
     if (state === 'finished') {
       status('Finished reading.');
-      void reader.clearHighlight();
+      void reader.finish();
     }
     if (state === 'stopped') status('Stopped.');
   },
@@ -292,11 +304,19 @@ for (const [id, name, action] of [
 elements.rate.addEventListener('input', () => command('speed', 'button', () => changeRate(Number(elements.rate.value))));
 elements.voice.addEventListener('change', () => {
   settings.voiceURI = elements.voice.value;
+  diagnosticVoice = settings.voiceURI;
+  diagnostics();
   updateFallback();
   persist();
   if (player.state === 'playing') player.play(player.index);
 });
 elements.offline.addEventListener('change', refreshVoices);
+elements.followWords.checked = settings.followWords !== false;
+elements.followWords.addEventListener('change', () => {
+  settings.followWords = elements.followWords.checked;
+  ++reader.wordRequest;
+  persist();
+});
 elements.yellow.checked = settings.highlight;
 elements.yellow.addEventListener('change', () => {
   settings.highlight = elements.yellow.checked;

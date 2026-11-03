@@ -468,3 +468,63 @@ range reliability, latency, clipboard and cold ribbon activation.
 `read-aloud-plus-install.zip` (manifest URLs unchanged, Version 1.0.4.0). Codex prompt:
 `agent-prompts/07-round5-fixes.md`. Next Windows retest:
 `testing/windows-e2e-round6-codex-prompt.md` (judged mainly from the Diagnostics event log).
+
+## Krystof feedback (v1.0.5)
+
+Krystof used v1.0.4 on a real multi-page English document in Word for Windows.
+His log showed successful position searches and normal completion. These fixes
+are verified with mocks locally; they are not a claim of a new Windows test.
+
+- **Stop and finish:** Stop restored the selection saved at Play time, which made
+  Word scroll several pages back and overwrote any new selection made while paused.
+  Finish previously only removed yellow; it did not restore that bookmark itself.
+  Stop, pane hide and pagehide now collapse only an add-in-owned sentence or word
+  selection to the current sentence's start, including after Previous or in a later
+  speech chunk. Finish collapses to the end of the last chunk read. A user's own
+  selection is kept. Endpoint comparisons avoid guessing ownership from matching
+  words. Logs say `stop/finish selection=kept-user` or `collapsed sentence=N`.
+  Tests also cover Stop while a selection has already been sent to a slow Word batch.
+- **Lost selection and scrolling:** missing searches and failed verification both
+  explicitly selected the original start. That explains the repeated jumps without
+  an audio failure. Those selections are gone; misses keep the previous selection
+  and yellow, and report `selection lost ... recovery=kept-previous`. Mapping tries
+  an exact offset first, then the nearest forward candidate to the expected offset
+  plus the last successful drift correction. Previous allows backward mapping.
+  Selection verification compares actual range endpoints and normalized text,
+  rather than requiring Word's expanded text lengths to equal a frozen snapshot.
+  Tests simulate expanded prefixes that are three characters longer, a search miss,
+  and later recovery (`match=nearest/drift drift=+3`). Fields, hidden text, controls,
+  objects or paused edits are plausible sources of drift, not proven diagnoses of
+  his document. Search uses safe nonempty literal segments around Word control
+  characters, including tabs, manual line breaks, cell marks and soft hyphens.
+- **Partial sentences:** the old search prefix limit also limited the selection.
+  Mapping now finds a prefix and a safe suffix and expands between them, checking
+  the full normalized chunk. The suffix search starts after the prefix so repeated,
+  overlapping text cannot hide the correct end. Missing or mismatched ends retain
+  a prefix selection with an explicit fallback log. Speech still uses chunks of up
+  to 300 characters; each complete chunk is selected, not the entire sentence across
+  multiple chunks. Tests cover long chunks, repeated suffixes, tabs/manual line breaks
+  and a missing end match.
+- **Follow each word:** a new saved checkbox defaults on. Player forwards only word
+  boundaries from its active speech attempt and derives missing/zero word lengths.
+  WordReader caches tracked word ranges with offsets (including repeated words and
+  local offset correction). Word selection shares the existing serialized queue;
+  newer word/chunk requests discard stale pending words without holding up speech.
+  Without events the full chunk stays selected; unmapped words fall back to that
+  chunk. Yellow stays on the chunk beneath selected words. Diagnostics reports
+  boundary delivery for the current voice. The log records the first event, failures,
+  and one `words highlighted=K of M` summary per chunk, including missing events.
+  Help and installation notes describe the option.
+
+Verification: **151 JS tests passed, 0 failed** with
+`cd addin && node --test --test-isolation=none test/*.test.mjs`.
+`BASE_URL=https://larok00.github.io/word-tts npm run build` passed.
+`~/.bend/bin/bend bend/splitter_test.bend`: **27 passed, 0 failed**.
+The packaged `addin/dist/install/manifest.xml` has Version **1.0.5.0**;
+its URL sequence is unchanged from v1.0.4, with no query strings.
+**No bend/ files changed**; the generated JavaScript splitter is unchanged.
+No network, commit, push or git configuration changes were made.
+
+Only real Word on Windows can confirm which of Krystof's voices emit usable word
+boundaries, what causes text-length drift in his document, and the actual scrolling
+behaviour during reading, Previous, pause/edit, Stop, finish and pane close.

@@ -21,3 +21,11 @@ test('long words and surrogate pairs remain valid', () => {
   assert.equal(result.length, 250);
   assert.equal([...result].length, 125);
 });
+
+
+test('literal search stops at Word control characters and keeps a nonempty segment', () => {
+  for (const mark of ['\v', '\t', '\u0007', '\u00A0', '\u00AD', '\u001E', '\u001F', '\uFFFC']) {
+    assert.equal(mapChunkToSearch(`Before${mark}after.`), 'Before');
+    assert.equal(mapChunkToSearch(`${mark}after.`), 'after.');
+  }
+});

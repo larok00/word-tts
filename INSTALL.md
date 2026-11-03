@@ -23,7 +23,7 @@ over HTTPS. It's hosted on **GitHub Pages from this (public) repo**:
 
 ### Publishing an update (no reinstall needed)
 After an update, fully close Word and reopen it. The pane footer shows the running
-version (for example **Read Aloud+ v1.0.4**); check it before testing. App files use
+version (for example **Read Aloud+ v1.0.5**); check it before testing. App files use
 network-first caching with an offline fallback:
 ```bash
 cd addin
@@ -145,3 +145,9 @@ a real Windows + Word session:
 - [ ] Closing and reopening the panel works. Pull the network cable and reopen the panel
       (offline cache, best effort).
 - [ ] Reading a 20+ page document stays smooth.
+
+“Follow each word” is on by default and is saved between sessions. Voices with word
+timing events select each spoken word; other voices keep the sentence selected.
+Yellow mode keeps the sentence yellow under the selected word. Stop leaves the cursor
+at the current sentence start, and finishing leaves it at the end; a selection you
+made yourself is left alone. Diagnostics reports whether the current voice sent word events.

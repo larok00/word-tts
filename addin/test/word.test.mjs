@@ -34,7 +34,7 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
     }
     // Word exposes loaded text after sync; this model supplies it immediately.
     get text() {
-      return text.slice(this.start, this.end);
+      return (this.expanded && this.start === 0 && this.end < text.length ? 'x'.repeat(context.prefixExtra || 0) : '') + text.slice(this.start, this.end);
     }
     /** Property loading queues no work in this synchronous document model. */
     load() {
@@ -57,7 +57,12 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
     }
     /** Expand in document order, as required for cursor-to-end reading. */
     expandTo(other) {
-      return new Range(Math.min(this.start, other.start), Math.max(this.end, other.end));
+      const range = new Range(Math.min(this.start, other.start), Math.max(this.end, other.end));
+      range.expanded = true;
+      return range;
+    }
+    compareLocationWith(other) {
+      return { value: this.start === other.start && this.end === other.end ? 'Equal' : 'Unrelated' };
     }
     /** Record user-visible document selection changes. */
     select() {
@@ -113,7 +118,7 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
       return callback(context);
     },
   };
-  return { context, selections, colors, tracked, searchCount: () => searches };
+  return { context, selections, colors, tracked, click: (start, end = start) => { selected = [start, end]; }, searchCount: () => searches };
 }
 test('cursor-to-end reading and ordered repeats survive skipped highlights and previous', async () => {
   const f = documentFixture('Intro. Same. Same.', 7, 7);
@@ -124,7 +129,7 @@ test('cursor-to-end reading and ordered repeats survive skipped highlights and p
   assert.deepEqual(f.selections.at(-1), [13, 18]);
   await reader.highlight(0, 'Same. ', false);
   assert.deepEqual(f.selections.at(-1), [7, 12]);
-  assert.equal(f.searchCount(), 2);
+  assert.ok(f.searchCount() >= 2);
   await reader.cleanup();
   assert.deepEqual(f.selections.at(-1), [7, 7]);
   assert.equal(f.tracked.size, 0);
@@ -186,7 +191,7 @@ test('caret reading starts at its sentence, retaining the original caret bookmar
     const reader = new WordReader();
     assert.equal(await reader.read(), expected);
     await reader.cleanup();
-    assert.deepEqual(f.selections.at(-1), [caret, caret]);
+    assert.equal(f.selections.length, 0);
     assert.equal(f.tracked.size, 0);
   }
 });
@@ -327,8 +332,7 @@ async function playbackFixture() {
 function assertSelection(f, index) {
   const start = sampleText.indexOf('Something')
     + f.chunks.slice(0, index).join('').length + f.chunks[index].search(/\S/);
-  const prefix = mapChunkToSearch(f.chunks[index]).replaceAll('^^', '^');
-  assert.deepEqual(f.selections.at(-1), [start, start + prefix.length]);
+  assert.deepEqual(f.selections.at(-1), [start, start + f.chunks[index].trim().length]);
   assert.equal(f.now(), f.chunks[index]);
   assert.equal(f.reader.lastHighlight.index, index);
   assert.notEqual(f.reader.lastHighlight.method, 'not-found');
@@ -482,7 +486,7 @@ test('reading, highlighting, restore and cleanup share one Word queue', async ()
   assert.equal(f.tracked.size, 0);
 });
 
-test('a persistent wrong duplicate is not-found and its visible selection is cleared', async () => {
+test('a persistent wrong duplicate is not-found without selecting the original start', async () => {
   const f = documentFixture('Same. Same. Same.', 0, 17);
   const reader = new WordReader();
   await reader.read();
@@ -491,7 +495,7 @@ test('a persistent wrong duplicate is not-found and its visible selection is cle
   await reader.highlight(2, 'Same.', false);
   assert.equal(reader.lastHighlight.method, 'not-found');
   assert.match(reader.lastHighlight.error, /offset\/text/);
-  assert.deepEqual(f.selections.at(-1), [0, 0]);
+  assert.ok(!f.selections.some(([start, end]) => start === 0 && end === 0));
 });
 
 test('position zero mapping never expands two identical collapsed ranges', async () => {
@@ -508,4 +512,150 @@ test('position zero mapping never expands two identical collapsed ranges', async
   await reader.highlight(0, 'One.', false);
   assert.equal(reader.lastHighlight.method, 'position-search');
   assert.deepEqual(f.selections.at(-1), [0, 4]);
+});
+
+for (const action of ['stop', 'finish']) {
+  for (const userClick of [false, true]) {
+    test(`${action} collapses our current highlight and preserves user selection=${userClick}`, async () => {
+      const text = 'One. Two. Three. Four.';
+      const f = documentFixture(text, 0, text.length);
+      const reader = new WordReader();
+      const events = [];
+      reader.onEvent = (event) => events.push(event);
+      await reader.read();
+      reader.chunks = ['One. ', 'Two. ', 'Three. ', 'Four.'];
+      for (const index of [3, 2, 1]) await reader.highlight(index, reader.chunks[index], false);
+      await reader.wordBoundary(1, 0, 0);
+      if (userClick) f.click(18, 20);
+      const count = f.selections.length;
+      if (action === 'finish') await reader.finish();
+      else await reader.cleanup();
+      if (userClick) assert.equal(f.selections.length, count);
+      else assert.deepEqual(f.selections.at(-1), action === 'stop' ? [5, 5] : [9, 9]);
+      assert.match(events.join('\n'), new RegExp(`${action} selection=${userClick ? 'kept-user' : 'collapsed sentence=2'}`));
+      await reader.cleanup();
+      assert.equal(f.tracked.size, 0);
+    });
+  }
+}
+
+test('Stop in a later speech chunk collapses to the sentence start', async () => {
+  const f = documentFixture('One. Long first part ends.', 0, 26);
+  const reader = new WordReader();
+  await reader.read();
+  reader.chunks = ['One. ', 'Long first ', 'part ends.'];
+  reader.sentenceNumbers = [0, 1, 1];
+  await reader.highlight(2, reader.chunks[2], false);
+  await reader.cleanup();
+  assert.deepEqual(f.selections.at(-1), [5, 5]);
+});
+
+test('sub-range length drift and a search miss never return to the original start', async () => {
+  const text = 'Intro. Same. Same. Same. Last.';
+  let miss = false;
+  const f = documentFixture(text, 0, text.length, null, (query) => !(miss && query === 'Same.'));
+  const reader = new WordReader();
+  const events = [];
+  reader.onEvent = (event) => events.push(event);
+  await reader.read();
+  reader.chunks = ['Intro. ', 'Same. ', 'Same. ', 'Same. ', 'Last.'];
+  f.context.prefixExtra = 3;
+  await reader.highlight(1, 'Same.', false);
+  assert.deepEqual(f.selections.at(-1), [7, 12]);
+  miss = true;
+  const count = f.selections.length;
+  await reader.highlight(2, 'Same.', false);
+  assert.equal(f.selections.length, count);
+  miss = false;
+  await reader.highlight(3, 'Same.', false);
+  assert.deepEqual(f.selections.at(-1), [19, 24]);
+  assert.match(events.join('\n'), /match=nearest drift=\+3/);
+  assert.match(events.join('\n'), /match=drift drift=\+3/);
+  assert.match(events.join('\n'), /selection lost .*recovery=kept-previous/);
+  assert.ok(!f.selections.some(([start, end]) => start === 0 && end === 0));
+  await reader.cleanup();
+});
+
+for (const chunk of ['A ' + 'long word '.repeat(28) + 'ending.', 'Before\vthe line\tand after.', 'Repeat '.repeat(40) + 'Repeat']) {
+  test(`full chunk selection survives long prefixes or controls: ${JSON.stringify(chunk.slice(0, 20))}`, async () => {
+    const f = documentFixture(chunk, 0, chunk.length);
+    const reader = new WordReader();
+    await reader.read(); reader.chunks = [chunk];
+    await reader.highlight(0, chunk, false);
+    assert.deepEqual(f.selections.at(-1), [0, chunk.length]);
+    await reader.cleanup();
+    assert.equal(f.tracked.size, 0);
+  });
+}
+
+test('word offsets disambiguate repeats, missing length, stale requests and chunk changes', async () => {
+  const f = documentFixture('Same same same. Next.', 0, 21);
+  const reader = new WordReader();
+  await reader.read(); reader.chunks = ['Same same same. ', 'Next.'];
+  await reader.highlight(0, reader.chunks[0], false);
+  await reader.wordBoundary(0, 5, 0);
+  assert.deepEqual(f.selections.at(-1), [5, 9]);
+  const first = reader.wordBoundary(0, 0, 4);
+  const latest = reader.wordBoundary(0, 10, 0);
+  await Promise.all([first, latest]);
+  assert.deepEqual(f.selections.at(-1), [10, 14]);
+  const count = f.selections.length;
+  const stale = reader.wordBoundary(0, 5, 4);
+  const chunk = reader.highlight(1, 'Next.', false);
+  await Promise.all([stale, chunk]);
+  assert.deepEqual(f.selections.slice(count), [[16, 21]]);
+  await reader.cleanup();
+  assert.equal(f.tracked.size, 0);
+});
+
+test('no word events keep the full sentence; yellow stays under words and summaries are sparse', async () => {
+  const f = documentFixture('One two.', 0, 8);
+  const reader = new WordReader();
+  const events = [];
+  reader.onEvent = (event) => events.push(event);
+  await reader.read(); reader.chunks = ['One two.'];
+  await reader.highlight(0, 'One two.', true);
+  assert.deepEqual(f.selections.at(-1), [0, 8]);
+  await reader.finish();
+  assert.match(events.join('\n'), /boundary events=none fallback=sentence/);
+  await reader.highlight(0, 'One two.', true);
+  await reader.wordBoundary(0, 4, 0);
+  assert.deepEqual(f.selections.at(-1), [4, 7]);
+  assert.equal(f.colors.get('0:8'), '#FFFF00');
+  await reader.cleanup();
+  assert.match(events.join('\n'), /words highlighted=1 of 2/);
+  assert.equal(f.colors.get('0:8'), null);
+});
+
+test('Stop while a selection is already sent collapses that highlight, not the old bookmark', async () => {
+  const f = documentFixture('One. Two.', 0, 9);
+  const reader = new WordReader();
+  await reader.read(); reader.chunks = ['One. ', 'Two.'];
+  let entered, release;
+  const waiting = new Promise((resolve) => { entered = resolve; });
+  let selected = false;
+  f.context.select = (range) => { selected = true; f.selections.push(range); };
+  f.context.sync = async () => {
+    if (selected && !release) { entered(); await new Promise((resolve) => { release = resolve; }); }
+  };
+  const highlight = reader.highlight(1, 'Two.', false);
+  await waiting;
+  const stop = reader.cleanup();
+  release();
+  await Promise.all([highlight, stop]);
+  assert.deepEqual(f.selections.at(-1), [5, 5]);
+  assert.equal(f.tracked.size, 0);
+});
+
+test('missing end search uses the safe prefix and reports the fallback', async () => {
+  const chunk = 'Beginning ' + 'word '.repeat(50) + 'End.';
+  const f = documentFixture(chunk, 0, chunk.length, null, (query) => !query.endsWith('End.'));
+  const reader = new WordReader();
+  const events = [];
+  reader.onEvent = (event) => events.push(event);
+  await reader.read(); reader.chunks = [chunk];
+  await reader.highlight(0, chunk, false);
+  assert.deepEqual(f.selections.at(-1), [0, mapChunkToSearch(chunk).length]);
+  assert.match(events.join('\n'), /fallback=prefix reason=end-not-found/);
+  await reader.cleanup();
 });

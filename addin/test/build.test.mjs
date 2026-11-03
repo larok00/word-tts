@@ -34,10 +34,10 @@ test('build substitutes deployment URL and copies all HTML references', async ()
   assert.equal((template.match(/{{VERSION}}/g) || []).length, 1);
   assert.equal(await readFile(new URL('dist/install/manifest.xml', root), 'utf8'), manifest);
   const html = await readFile(new URL('dist/taskpane.html', root), 'utf8');
-  assert.ok(html.includes('taskpane.css?v=1.0.4'));
-  assert.ok(html.includes('taskpane.js?v=1.0.4'));
-  assert.ok(html.includes('Read Aloud+ v1.0.4'));
-  assert.ok((await readFile(new URL('dist/lib/version.js', root), 'utf8')).includes("VERSION = '1.0.4'"));
+  assert.ok(html.includes('taskpane.css?v=1.0.5'));
+  assert.ok(html.includes('taskpane.js?v=1.0.5'));
+  assert.ok(html.includes('Read Aloud+ v1.0.5'));
+  assert.ok((await readFile(new URL('dist/lib/version.js', root), 'utf8')).includes("VERSION = '1.0.5'"));
   for (const match of html.matchAll(/(?:src|href)="([^"]+)"/g)) {
     if (!match[1].startsWith('https:')) await access(new URL('dist/' + match[1], root));
   }
@@ -56,13 +56,13 @@ test('built relative module imports carry the release version and work in Node',
       if (!file.endsWith('.js')) continue;
       const source = await readFile(new URL(directory + file, root), 'utf8');
       for (const match of source.matchAll(/\b(?:from\s*|import\s*(?:\(\s*)?)['"](\.{1,2}\/[^'"]+)['"]/g)) {
-        assert.ok(match[1].endsWith('?v=1.0.4'), `${directory}${file}: ${match[1]}`);
+        assert.ok(match[1].endsWith('?v=1.0.5'), `${directory}${file}: ${match[1]}`);
         imports++;
       }
     }
   }
   assert.ok(imports > 0);
-  const { sentenceStartOffset } = await import('../dist/lib/sentence-start.js?v=1.0.4');
+  const { sentenceStartOffset } = await import('../dist/lib/sentence-start.js?v=1.0.5');
   assert.equal(sentenceStartOffset('First. Second. '), 15);
 });
 
@@ -137,7 +137,7 @@ test('shortcut package avoids known Word bindings and registers every action', a
     assert.equal(shortcuts.shortcuts.filter((s) => s.action === action.id).length, 1);
   }
   const manifest = await readFile(new URL('dist/manifest.xml', root), 'utf8');
-  assert.ok(manifest.includes('<Version>1.0.4.0</Version>'));
+  assert.ok(manifest.includes('<Version>1.0.5.0</Version>'));
   assert.ok(manifest.includes('<AppDomain>https://example.github.io</AppDomain>'));
   assert.ok(manifest.includes('/assets/icon-64.png'));
   for (const match of manifest.matchAll(/https:\/\/example.github.io\/word-tts\/([^"<]+)/g)) {

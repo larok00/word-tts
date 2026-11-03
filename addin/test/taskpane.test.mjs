@@ -16,10 +16,16 @@ function fixture(failSetup = false, highlightOutcome = null) {
   let reads = 0;
   let copied;
   let player;
+  const lifecycle = {};
+  const wordCalls = [];
+  const cleanups = [];
+  const saved = [];
   const voice = { name: 'Local', voiceURI: 'local', localService: true };
   const clock = { setTimeout: () => 1, clearTimeout() {} };
   const office = {
     onReady: (callback) => callback(),
+    VisibilityMode: { taskpane: 'taskpane' },
+    addin: { onVisibilityModeChanged: (callback) => { lifecycle.visibility = callback; } },
     actions: { associate: (name, callback) => { actions[name] = callback; } },
   };
   try {
@@ -38,29 +44,29 @@ function fixture(failSetup = false, highlightOutcome = null) {
       createElement: () => ({}),
       addEventListener: (name, callback) => { keys[name] = callback; },
     },
-    window: { Office: office, addEventListener() {}, speechSynthesis: {
+    window: { Office: office, addEventListener: (name, callback) => { lifecycle[name] = callback; }, speechSynthesis: {
       speak: (utterance) => utterances.push(utterance),
       cancel() {}, pause() {}, resume() {}, getVoices: () => { if (failSetup === 'voices') throw Error('voices unavailable'); return [voice]; },
       addEventListener: (_, callback) => { voiceChange = callback; },
     } },
     SpeechSynthesisUtterance: class { constructor(text) { this.text = text; } },
     navigator: { clipboard: { writeText: async (text) => { copied = text; } } },
-    loadSettings: () => { if (failSetup === 'settings') throw Error('settings unavailable'); return { rate: 1 }; }, saveSettings() {}, normalizeRate: (rate) => rate,
+    loadSettings: () => { if (failSetup === 'settings') throw Error('settings unavailable'); return { rate: 1 }; }, saveSettings: (_, settings) => saved.push({ ...settings }), normalizeRate: (rate) => rate,
     filterVoices: (voices) => voices, pickDefault: (voices) => voices[0],
     buildFallbackOrder: (voices) => voices,
     sentenceChunks: () => ({ chunks: ['One.', 'Two.'], sentenceNumbers: [0, 1], sentenceTexts: ['One.', 'Two.'] }),
     WordReader: class {
       async read() { reads++; this.lastStartMethod = 'sentence'; return 'One. Two.'; }
-      invalidate() {} cleanup() {}
+      invalidate() {} cleanup() { cleanups.push('stop'); }
       highlight() { this.lastHighlight = highlightOutcome; }
-      clearHighlight() {}
+      clearHighlight() {} finish() { cleanups.push('finish'); } wordBoundary(...args) { wordCalls.push(args); }
     },
     Player: class extends Player {
       constructor(options) { super({ ...options, clock }); player = this; }
     },
   });
   } catch (error) { if (!failSetup) throw error; }
-  return { elements, actions, utterances, player, voiceChange,
+  return { elements, actions, utterances, player, voiceChange, lifecycle, wordCalls, cleanups, saved,
     copied: () => copied,
     reads: () => reads,
     click: (id) => elements.get(id).handlers.click(),
@@ -98,7 +104,7 @@ test('Office Play uses the same document read and diagnostics as the button', as
   await Promise.resolve();
   assert.equal(f.reads(), 1);
   assert.equal(f.player.state, 'playing');
-  assert.equal(f.elements.get('diagnostics').textContent, 'Version 1.0.4; start: sentence');
+  assert.equal(f.elements.get('diagnostics').textContent, 'Version 1.0.4; start: sentence; word boundaries: not seen (current voice)');
   assert.equal(f.elements.get('version').textContent, 'Read Aloud+ v1.0.4');
 });
 
@@ -115,7 +121,7 @@ test('Diagnostics displays the completed highlight outcome and error beside star
   await f.click('play');
   await Promise.resolve();
   assert.equal(f.elements.get('diagnostics').textContent,
-    'Version 1.0.4; start: sentence; highlight chunk: 1 remapped (InvalidObjectPath)');
+    'Version 1.0.4; start: sentence; highlight chunk: 1 remapped (InvalidObjectPath); word boundaries: not seen (current voice)');
 });
 
 
@@ -159,3 +165,31 @@ test('Copy log includes version, summary and raw end/error callbacks, even when 
   assert.equal(f.elements.get('copyResult').textContent, 'Copied');
   assert.equal(f.elements.get('eventLog').textContent, undefined);
 });
+
+
+test('word following defaults on, persists off, and Diagnostics observes active boundaries', async () => {
+  const f = fixture();
+  await f.click('play');
+  const checkbox = f.elements.get('followWords');
+  assert.equal(checkbox.checked, true);
+  f.utterances.at(-1).onboundary({ name: 'word', charIndex: 0 });
+  assert.deepEqual(f.wordCalls[0], [0, 0, 3, true]);
+  assert.match(f.elements.get('diagnostics').textContent, /word boundaries: seen/);
+  checkbox.checked = false;
+  checkbox.handlers.change();
+  assert.equal(f.saved.at(-1).followWords, false);
+  f.utterances.at(-1).onboundary({ name: 'word', charIndex: 0, charLength: 3 });
+  assert.equal(f.wordCalls.at(-1)[3], false);
+});
+
+for (const close of ['visibility', 'pagehide', 'stop', 'finish']) {
+  test(`${close} uses selection-safe reader lifecycle`, async () => {
+    const f = fixture();
+    await f.click('play');
+    if (close === 'visibility') f.lifecycle.visibility({ visibilityMode: 'hidden' });
+    else if (close === 'pagehide') f.lifecycle.pagehide();
+    else if (close === 'stop') await f.click('stop');
+    else { f.utterances.at(-1).onend(); f.utterances.at(-1).onend(); }
+    assert.equal(f.cleanups.at(-1), close === 'finish' ? 'finish' : 'stop');
+  });
+}

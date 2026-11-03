@@ -18,8 +18,8 @@ function storage() {
 }
 test('settings roundtrip', () => {
   const store = storage();
-  saveSettings(store, { voiceURI: 'a', rate: 1.2, highlight: true });
-  assert.deepEqual(loadSettings(store), { voiceURI: 'a', rate: 1.2, highlight: true });
+  saveSettings(store, { voiceURI: 'a', rate: 1.2, highlight: true, followWords: true });
+  assert.deepEqual(loadSettings(store), { voiceURI: 'a', rate: 1.2, highlight: true, followWords: true });
 });
 test('missing, corrupt and denied storage never throw', () => {
   const store = storage();
@@ -36,4 +36,13 @@ test('rates clamp, round and reject nonfinite values', () => {
   assert.equal(normalizeRate(9), 2.5);
   assert.equal(normalizeRate(1.26), 1.3);
   assert.equal(normalizeRate(NaN), 1);
+});
+
+
+test('word following defaults on for old preferences and persists explicit false', () => {
+  const store = storage();
+  store.setItem(SETTINGS_KEY, '{"highlight":true}');
+  assert.equal(loadSettings(store).followWords, true);
+  saveSettings(store, { followWords: false });
+  assert.equal(loadSettings(store).followWords, false);
 });
