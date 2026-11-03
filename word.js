@@ -1,8 +1,15 @@
 /** Word API boundary. Exports WordReader; speech never waits for its serialized
  * highlight queue. Tracked ranges remain valid across separate Word.run batches.
  */
-import { sentenceStartOffset } from './lib/sentence-start.js?v=1.0.4';
-import { mapChunkToSearch } from './lib/mapping.js?v=1.0.4';
+import { sentenceStartOffset } from './lib/sentence-start.js?v=1.0.6';
+import { mapChunkToSearch, normalizeText, searchPart } from './lib/mapping.js?v=1.0.6';
+/** Keep Office's failing call visible without filling the small diagnostics history. */
+export function describeError(error) {
+  return [error.code && `code=${error.code}`, error.message,
+    error.debugInfo?.errorLocation && `location=${error.debugInfo.errorLocation}`,
+    error.debugInfo?.statement && `statement=${error.debugInfo.statement}`]
+    .filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().slice(0, 160) || String(error).slice(0, 160);
+}
 export class WordReader {
   /** Keep document state separate from the speech session. */
   constructor() {
@@ -17,6 +24,8 @@ export class WordReader {
     this.lastHighlight = null;
     this.lastStartMethod = null;
     this.lastStartError = null;
+    this.drift = 0;
+    this.wordRequest = 0;
   }
   /** Serialize every Word batch; a failed caller never poisons the following work. */
   enqueue(work) {
@@ -109,34 +118,65 @@ export class WordReader {
   /** Navigation cancels obsolete Word work before speech can emit callbacks. */
   invalidate() {
     ++this.generation;
+    ++this.wordRequest;
   }
-  /** Chunk offsets include whitespace and paragraph marks in the original reading text. */
-  chunkOffset(index) {
-    return this.chunks.slice(0, index).reduce((offset, chunk) => offset + chunk.length, 0)
-      + (this.chunks[index]?.search(/\S/) || 0);
-  }
-  /** Search the whole reading range, then disambiguate duplicates by prefix length. */
+  /** Search prefixes first; Word sub-range lengths can differ from the reading snapshot. */
   async mapIndex(context, index, chunk) {
-    const search = mapChunkToSearch(chunk);
-    if (!search) return null;
-    const results = this.reading.search(search, { matchCase: true, matchWildcards: false });
+    const part = searchPart(chunk);
+    if (!part) return null;
+    const results = this.reading.search(part.query, { matchCase: true, matchWildcards: false });
     results.load('items');
     await context.sync();
     const start = this.reading.getRange('Start');
-    const candidates = results.items.map((range) => ({
-      // Use a nonempty range even at offset zero; avoid expanding two collapsed points.
-      range, prefix: start.expandTo(range),
-    }));
+    const candidates = results.items.map((range) => ({ range, prefix: start.expandTo(range) }));
     for (const candidate of candidates) {
       candidate.prefix.load('text');
       candidate.range.load('text');
     }
     await context.sync();
-    return candidates.find(({ prefix, range }) =>
-      prefix.text.length - range.text.length === this.chunkOffset(index)
-      && range.text === search.replaceAll('^^', '^'))?.range || null;
+    const expected = this.chunks.slice(0, index).join('').length + part.offset;
+    const valid = candidates.map(({ range, prefix }) => ({ range,
+      offset: prefix.text.length - range.text.length,
+    })).filter(({ range }) => normalizeText(range.text) === normalizeText(part.text));
+    // Reverse navigation starts a new forward search window.
+    const floor = this.current && index > this.current.index ? this.current.offset : -Infinity;
+    const found = valid.find(({ offset }) => offset === expected)
+      || valid.filter(({ offset }) => offset >= floor)
+        .sort((a, b) => Math.abs(a.offset - expected - this.drift) - Math.abs(b.offset - expected - this.drift))[0];
+    if (!found) return null;
+    this.match = found.offset === expected ? 'exact' : found.offset === expected + this.drift ? 'drift' : 'nearest';
+    this.mappedDrift = found.offset - expected;
+    this.mappedOffset = found.offset;
+    let range = found.range;
+    const tail = searchPart(chunk.slice(part.offset + part.text.length), true);
+    if (tail) {
+      const rest = range.getRange('End').expandTo(this.reading.getRange('End'));
+      const ends = rest.search(tail.query, { matchCase: true, matchWildcards: false });
+      ends.load('items');
+      await context.sync();
+      const expanded = ends.items.map((end) => range.expandTo(end));
+      for (const candidate of expanded) candidate.load('text');
+      await context.sync();
+      if (expanded.length) range = expanded.find((candidate) => normalizeText(candidate.text) === normalizeText(chunk)) || expanded[0];
+      else this.onEvent(`selection partial chunk=${index + 1} fallback=prefix reason=end-not-found`);
+    }
+    range.load('text');
+    await context.sync();
+    this.mappedText = range.text;
+    if (normalizeText(range.text) !== normalizeText(chunk)) {
+      this.onEvent(`selection partial chunk=${index + 1} fallback=prefix reason=full-text-mismatch`);
+      range = found.range;
+      this.mappedText = range.text;
+    }
+    return range;
   }
-  /** Verify the visible selection's position as well as its text (duplicates can match). */
+  /** Compare actual endpoints, without relying on host-specific text lengths. */
+  async sameRange(context, left, right) {
+    const comparison = left.compareLocationWith(right);
+    await context.sync();
+    return String(comparison.value).toLowerCase() === 'equal';
+  }
+  /** Verify selection and keep an owned bookmark for Stop, including word selections. */
   async selectRange(context, range, index, chunk, yellowMode, generation) {
     if (generation !== this.generation) return;
     if (yellowMode) {
@@ -148,34 +188,186 @@ export class WordReader {
         this.yellow = { range: range.getRange(), color };
         this.yellow.range.track();
         range.font.highlightColor = '#FFFF00';
-        await context.sync();
-        return;
       }
     }
     if (generation !== this.generation) return;
+    this.pendingSelection?.range.untrack();
+    this.pendingSelection = { range: range.getRange(), index };
+    this.pendingSelection.range.track();
     range.select();
     await context.sync();
     if (generation !== this.generation) return;
     const selection = context.document.getSelection();
-    const prefix = this.reading.getRange('Start').expandTo(selection);
-    const suffix = selection.expandTo(this.reading.getRange('End'));
     selection.load('text');
-    prefix.load('text');
-    suffix.load('text');
-    await context.sync();
+    const equal = await this.sameRange(context, selection, range);
     if (generation !== this.generation) return;
-    const expected = mapChunkToSearch(chunk)?.replaceAll('^^', '^');
-    if (prefix.text.length - selection.text.length !== this.chunkOffset(index) || selection.text !== expected
-      || prefix.text.length + suffix.text.length - selection.text.length !== this.reading.text.length) {
-      // Clear an unverified selection before retrying; never leave a wrong duplicate lit up.
-      this.original.getRange('Start').select();
-      await context.sync();
+    if (!equal || normalizeText(selection.text) !== normalizeText(this.mappedText)) {
       throw new Error('Word selection did not match the chunk offset/text');
     }
+    this.owned?.untrack();
+    this.owned = range.getRange();
+    this.owned.track();
+  }
+  /** Release chunk and word bookmarks together; never retain search proxies untracked. */
+  releaseCurrent() {
+    if (!this.current) return;
+    this.current.range.untrack();
+    for (const word of this.current.words) word.range?.untrack();
+    this.current = null;
+  }
+  /** Cache repeated words by their offsets, not by their spelling alone. */
+  async cacheWords(context, range, index, chunk, generation) {
+    const words = [...chunk.matchAll(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu)]
+      .map((match) => ({ text: match[0], offset: match.index, length: match[0].length }));
+    const searches = new Map();
+    for (const word of words) {
+      if (!searches.has(word.text)) {
+        const results = range.search(mapChunkToSearch(word.text), { matchCase: true, matchWildcards: false });
+        results.load('items');
+        searches.set(word.text, results);
+      }
+    }
+    await context.sync();
+    const candidates = new Map();
+    for (const [text, results] of searches) {
+      candidates.set(text, results.items.map((item, occurrence) => {
+        const prefix = range.getRange('Start').expandTo(item);
+        prefix.load('text'); item.load('text');
+        return { range: item, prefix, occurrence };
+      }));
+    }
+    await context.sync();
+    if (generation !== this.generation) return;
+    let correction = 0, previous = -1;
+    const leading = chunk.search(/\S/);
+    for (const word of words) {
+      const choices = candidates.get(word.text).map((candidate) => ({ ...candidate,
+        offset: candidate.prefix.text.length - candidate.range.text.length,
+      })).filter((candidate) => candidate.offset > previous && candidate.range.text === word.text);
+      const found = choices.sort((a, b) => Math.abs(a.offset - word.offset + leading - correction)
+        - Math.abs(b.offset - word.offset + leading - correction))[0];
+      if (found) {
+        word.occurrence = found.occurrence;
+        word.range = found.range.getRange(); word.range.track();
+        correction = found.offset - (word.offset - leading);
+        previous = found.offset;
+      }
+    }
+    this.releaseCurrent();
+    this.current = { range: range.getRange(), index, offset: this.mappedOffset, words };
+    this.current.range.track();
+    await context.sync();
+    if (generation !== this.generation) this.releaseCurrent();
+  }
+  /** Count failures, but keep full Office detail only for the first failure per chunk. */
+  wordFailure(index, step, error) {
+    if (this.wordStats?.index !== index) return false;
+    const first = !this.wordStats.failures++;
+    if (first) this.onEvent(`word fallback=sentence step=${step} ${describeError(error)}`);
+    return first;
+  }
+  /** Select and keep a standalone bookmark for Stop. */
+  async selectWord(context, range, valid) {
+    if (!valid()) return;
+    const owned = range.getRange();
+    owned.track();
+    try {
+      range.select();
+      await context.sync();
+      this.owned?.untrack();
+      this.owned = owned;
+    } catch (error) {
+      owned.untrack();
+      throw error;
+    }
+  }
+  /** Speech never awaits Word. Only the newest pending word may change selection. */
+  highlightWord(index, charIndex, charLength) {
+    const generation = this.generation;
+    const request = ++this.wordRequest;
+    return this.enqueue(async () => {
+      const valid = () => generation === this.generation && request === this.wordRequest
+        && this.current?.index === index;
+      if (!valid()) return;
+      const word = this.current.words.find((word) => charIndex >= word.offset && charIndex < word.offset + word.length);
+      if (!word?.range) {
+        this.wordFailure(index, 'lookup', new Error('reason=unmapped'));
+        return;
+      }
+      try {
+        await Word.run(this.reading, (context) => this.selectWord(context, word.range, valid));
+      } catch (error) {
+        if (!valid()) return;
+        const first = this.wordFailure(index, 'select-cached', error);
+        // A new batch avoids reusing the proxy that the host just rejected.
+        try {
+          await Word.run(this.reading, async (context) => {
+            if (!valid()) return;
+            const results = this.current.range.search(mapChunkToSearch(word.text), {
+              matchCase: true, matchWildcards: false,
+            });
+            results.load('items');
+            await context.sync();
+            if (!valid()) return;
+            const item = results.items[word.occurrence];
+            if (!item) throw new Error('reason=unmapped');
+            const fresh = item.getRange();
+            fresh.track();
+            try {
+              await this.selectWord(context, fresh, valid);
+              if (!valid()) { fresh.untrack(); return; }
+              word.range.untrack();
+              await context.sync();
+              word.range = fresh;
+            } catch (error) {
+              fresh.untrack();
+              throw error;
+            }
+          });
+          if (first) this.onEvent('word retry=fresh-search ok');
+        } catch (error) {
+          if (first) this.onEvent(`word retry=fresh-search failed ${describeError(error)}`);
+          // Restore once after a successful word; otherwise the chunk is still selected.
+          if (valid() && this.current.wordSelected) {
+            this.current.wordSelected = false;
+            try {
+              await Word.run(this.reading, (context) => this.selectWord(context, this.current.range, valid));
+            } catch (error) {
+              if (first) this.onEvent(`word fallback=sentence step=select-sentence ${describeError(error)}`);
+            }
+          }
+          return;
+        }
+      }
+      if (valid() && this.wordStats?.index === index) {
+        this.current.wordSelected = true;
+        this.wordStats.highlighted.add(word.offset);
+      }
+    });
+  }
+  /** One summary per chunk keeps the small Diagnostics history useful. */
+  summarizeWords() {
+    if (!this.wordStats) return;
+    const { index, highlighted, events, total, failures } = this.wordStats;
+    this.onEvent(`chunk=${index + 1} words highlighted=${highlighted.size} of ${total} word failures=${failures}`
+      + (events ? '' : ' boundary events=none fallback=sentence'));
+    this.wordStats = null;
+  }
+  /** Count boundary delivery even when word following is disabled. */
+  wordBoundary(index, charIndex, charLength, follow = true) {
+    if (this.wordStats?.index === index) {
+      if (!this.wordStats.events++) this.onEvent(`word boundary chunk=${index + 1} first`);
+    }
+    if (follow) return this.highlightWord(index, charIndex, charLength);
   }
   /** Coalesce pending requests; retry once in a fresh batch after a host failure. */
   highlight(index, chunk, yellowMode) {
+    this.summarizeWords();
+    this.wordStats = { index, events: 0, failures: 0, highlighted: new Set(),
+      total: [...chunk.matchAll(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu)].length };
+    this.requestedIndex = index;
     const generation = ++this.generation;
+    ++this.wordRequest;
     const label = `sentence=${(this.sentenceNumbers[index] ?? index) + 1} chunk=${index + 1}`;
     this.onEvent(`select request ${label}`);
     return this.enqueue(async () => {
@@ -193,22 +385,35 @@ export class WordReader {
         try {
           // A failed Office batch may contain invalid proxies; retry in a new batch.
           await Word.run(this.reading, async (context) => {
-            await this.restoreYellow(context);
             if (generation !== this.generation) return;
             const range = await this.mapIndex(context, index, chunk);
             if (generation !== this.generation) return;
             if (!range) {
               method = 'not-found';
-              this.original.getRange('Start').select();
-              await context.sync();
+              this.onEvent(`selection lost ${label} recovery=kept-previous reason=not-found`);
               return;
             }
+            await this.restoreYellow(context);
             await this.selectRange(context, range, index, chunk, yellowMode, generation);
+            if (generation !== this.generation) return;
+            this.drift = this.mappedDrift;
+            try { await this.cacheWords(context, range, index, chunk, generation); }
+            catch (error) {
+              if (generation !== this.generation) return;
+              // A voice can still read with sentence selection if word lookup fails.
+              this.wordFailure(index, 'cache-words', error);
+              this.releaseCurrent();
+              this.current = { range: range.getRange(), index, offset: this.mappedOffset, words: [] };
+              this.current.range.track();
+              await context.sync();
+            }
+            this.onEvent(`select ${label} method=position-search match=${this.match} drift=${this.drift >= 0 ? '+' : ''}${this.drift}`);
           });
           break;
         } catch (caught) {
           method = 'not-found';
-          error = [caught.code, caught.message].filter(Boolean).join(': ') || String(caught);
+          error = describeError(caught);
+          this.onEvent(`selection lost ${label} recovery=kept-previous error=${error}`);
           this.onEvent(`select ${label} method=position-search error=${error} retry=${attempt}`);
         }
       }
@@ -226,19 +431,61 @@ export class WordReader {
       if (anchor) return Word.run(anchor, (context) => this.restoreYellow(context));
     }).catch((error) => this.onEvent(`clear highlight error=${error.message || error}`));
   }
-  /** Release every tracked range, optionally restoring the user's original selection. */
-  cleanup(restoreSelection = true) {
-    ++this.generation;
+  /** Collapse only a selection we still own; user clicks always win. */
+  async settleSelection(context, action) {
+    let result = 'kept-user';
+    const selection = context.document.getSelection();
+    let current = null;
+    if (this.owned && this.current && await this.sameRange(context, selection, this.owned)) current = this.current;
+    else if (this.pendingSelection && await this.sameRange(context, selection, this.pendingSelection.range)) current = this.pendingSelection;
+    if (current) {
+      let range = current.range;
+      let index = current.index;
+      if (action === 'finish' && this.requestedIndex !== index) {
+        index = this.requestedIndex;
+        range = await this.mapIndex(context, index, this.chunks[index]) || range;
+      }
+      if (action === 'stop') {
+        const sentence = this.sentenceNumbers[index] ?? index;
+        const first = this.sentenceNumbers.length ? this.sentenceNumbers.indexOf(sentence) : index;
+        if (first !== index) range = await this.mapIndex(context, first, this.chunks[first]) || range;
+      }
+      // Recheck after mapping: the user may click during a slow Word sync.
+      if (await this.sameRange(context, context.document.getSelection(), selection)) {
+        range.getRange(action === 'finish' ? 'End' : 'Start').select();
+        await context.sync();
+        result = `collapsed sentence=${(this.sentenceNumbers[index] ?? index) + 1}`;
+      }
+    }
+    this.onEvent(`${action} selection=${result}`);
+  }
+  /** Finish retains navigation bookmarks; Stop releases the complete session. */
+  finish() {
+    this.invalidate();
+    return this.enqueue(() => this.reading && Word.run(this.reading, async (context) => {
+      this.summarizeWords();
+      await this.settleSelection(context, 'finish');
+      await this.restoreYellow(context);
+    })).catch((error) => this.onEvent(`finish error=${error.message || error}`));
+  }
+  /** Release tracked ranges without ever restoring the Play-time bookmark. */
+  cleanup(settle = true) {
+    this.invalidate();
     return this.enqueue(async () => {
       if (!this.reading && !this.original && !this.yellow) return;
       await Word.run(this.reading || this.original, async (context) => {
+        this.summarizeWords();
+        if (settle) await this.settleSelection(context, 'stop');
         await this.restoreYellow(context);
-        if (restoreSelection && this.original) this.original.select();
+        this.releaseCurrent();
+        this.pendingSelection?.range.untrack(); this.pendingSelection = null;
+        this.owned?.untrack(); this.owned = null;
         if (this.reading) this.reading.untrack();
         if (this.original) this.original.untrack();
         this.reading = null;
         this.original = null;
         this.chunks = [];
+        this.drift = 0;
         await context.sync();
       });
     }).catch((error) => this.onEvent(`cleanup error=${error.message || error}`));
