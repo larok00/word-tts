@@ -270,3 +270,20 @@ for (const direction of ['previous', 'next']) {
     }
   }
 }
+
+test('only active word boundaries pass through, deriving missing lengths', () => {
+  const words = [];
+  const f = fixture({ chunks: ['Hello hello.', 'Next.'], onWord: (...args) => words.push(args) });
+  f.player.play();
+  const old = f.current();
+  old.onboundary({ name: 'sentence', charIndex: 0 });
+  old.onboundary({ name: 'word', charIndex: 0 });
+  old.onboundary({ name: 'word', charIndex: 6, charLength: 0 });
+  old.onboundary({ name: 'word', charIndex: 6, charLength: 3 });
+  f.player.pause();
+  old.onboundary({ name: 'word', charIndex: 0 });
+  f.player.next();
+  old.onboundary({ name: 'word', charIndex: 0 });
+  f.current().onboundary({ name: 'word', charIndex: 0 });
+  assert.deepEqual(words, [[0, 0, 5], [0, 6, 5], [0, 6, 3], [1, 0, 4]]);
+});
