@@ -1,2 +1,2 @@
 /** Build replaces this token from package.json. */
-export const VERSION = '1.0.5';
+export const VERSION = '1.0.6';

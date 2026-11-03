@@ -1,8 +1,15 @@
 /** Word API boundary. Exports WordReader; speech never waits for its serialized
  * highlight queue. Tracked ranges remain valid across separate Word.run batches.
  */
-import { sentenceStartOffset } from './lib/sentence-start.js?v=1.0.5';
-import { mapChunkToSearch, normalizeText, searchPart } from './lib/mapping.js?v=1.0.5';
+import { sentenceStartOffset } from './lib/sentence-start.js?v=1.0.6';
+import { mapChunkToSearch, normalizeText, searchPart } from './lib/mapping.js?v=1.0.6';
+/** Keep Office's failing call visible without filling the small diagnostics history. */
+export function describeError(error) {
+  return [error.code && `code=${error.code}`, error.message,
+    error.debugInfo?.errorLocation && `location=${error.debugInfo.errorLocation}`,
+    error.debugInfo?.statement && `statement=${error.debugInfo.statement}`]
+    .filter(Boolean).join(' ').replace(/\s+/g, ' ').trim().slice(0, 160) || String(error).slice(0, 160);
+}
 export class WordReader {
   /** Keep document state separate from the speech session. */
   constructor() {
@@ -223,10 +230,10 @@ export class WordReader {
     await context.sync();
     const candidates = new Map();
     for (const [text, results] of searches) {
-      candidates.set(text, results.items.map((item) => {
+      candidates.set(text, results.items.map((item, occurrence) => {
         const prefix = range.getRange('Start').expandTo(item);
         prefix.load('text'); item.load('text');
-        return { range: item, prefix };
+        return { range: item, prefix, occurrence };
       }));
     }
     await context.sync();
@@ -240,7 +247,8 @@ export class WordReader {
       const found = choices.sort((a, b) => Math.abs(a.offset - word.offset + leading - correction)
         - Math.abs(b.offset - word.offset + leading - correction))[0];
       if (found) {
-        word.range = found.range; word.range.track();
+        word.occurrence = found.occurrence;
+        word.range = found.range.getRange(); word.range.track();
         correction = found.offset - (word.offset - leading);
         previous = found.offset;
       }
@@ -248,36 +256,100 @@ export class WordReader {
     this.releaseCurrent();
     this.current = { range: range.getRange(), index, offset: this.mappedOffset, words };
     this.current.range.track();
+    await context.sync();
+    if (generation !== this.generation) this.releaseCurrent();
+  }
+  /** Count failures, but keep full Office detail only for the first failure per chunk. */
+  wordFailure(index, step, error) {
+    if (this.wordStats?.index !== index) return false;
+    const first = !this.wordStats.failures++;
+    if (first) this.onEvent(`word fallback=sentence step=${step} ${describeError(error)}`);
+    return first;
+  }
+  /** Select and keep a standalone bookmark for Stop. */
+  async selectWord(context, range, valid) {
+    if (!valid()) return;
+    const owned = range.getRange();
+    owned.track();
+    try {
+      range.select();
+      await context.sync();
+      this.owned?.untrack();
+      this.owned = owned;
+    } catch (error) {
+      owned.untrack();
+      throw error;
+    }
   }
   /** Speech never awaits Word. Only the newest pending word may change selection. */
   highlightWord(index, charIndex, charLength) {
     const generation = this.generation;
     const request = ++this.wordRequest;
     return this.enqueue(async () => {
-      if (generation !== this.generation || request !== this.wordRequest || this.current?.index !== index) return;
+      const valid = () => generation === this.generation && request === this.wordRequest
+        && this.current?.index === index;
+      if (!valid()) return;
       const word = this.current.words.find((word) => charIndex >= word.offset && charIndex < word.offset + word.length);
       if (!word?.range) {
-        this.onEvent(`word fallback=sentence reason=unmapped chunk=${index + 1}`);
+        this.wordFailure(index, 'lookup', new Error('reason=unmapped'));
+        return;
       }
       try {
-        await Word.run(this.reading, async (context) => {
-          if (generation !== this.generation || request !== this.wordRequest) return;
-          const range = word?.range || this.current.range;
-          range.select();
-          this.owned?.untrack();
-          this.owned = range.getRange(); this.owned.track();
-          await context.sync();
-          if (generation !== this.generation) return;
-          if (word?.range && this.wordStats?.index === index) this.wordStats.highlighted.add(word.offset);
-        });
-      } catch (error) { this.onEvent(`word fallback=sentence reason=${error.message || error}`); }
+        await Word.run(this.reading, (context) => this.selectWord(context, word.range, valid));
+      } catch (error) {
+        if (!valid()) return;
+        const first = this.wordFailure(index, 'select-cached', error);
+        // A new batch avoids reusing the proxy that the host just rejected.
+        try {
+          await Word.run(this.reading, async (context) => {
+            if (!valid()) return;
+            const results = this.current.range.search(mapChunkToSearch(word.text), {
+              matchCase: true, matchWildcards: false,
+            });
+            results.load('items');
+            await context.sync();
+            if (!valid()) return;
+            const item = results.items[word.occurrence];
+            if (!item) throw new Error('reason=unmapped');
+            const fresh = item.getRange();
+            fresh.track();
+            try {
+              await this.selectWord(context, fresh, valid);
+              if (!valid()) { fresh.untrack(); return; }
+              word.range.untrack();
+              await context.sync();
+              word.range = fresh;
+            } catch (error) {
+              fresh.untrack();
+              throw error;
+            }
+          });
+          if (first) this.onEvent('word retry=fresh-search ok');
+        } catch (error) {
+          if (first) this.onEvent(`word retry=fresh-search failed ${describeError(error)}`);
+          // Restore once after a successful word; otherwise the chunk is still selected.
+          if (valid() && this.current.wordSelected) {
+            this.current.wordSelected = false;
+            try {
+              await Word.run(this.reading, (context) => this.selectWord(context, this.current.range, valid));
+            } catch (error) {
+              if (first) this.onEvent(`word fallback=sentence step=select-sentence ${describeError(error)}`);
+            }
+          }
+          return;
+        }
+      }
+      if (valid() && this.wordStats?.index === index) {
+        this.current.wordSelected = true;
+        this.wordStats.highlighted.add(word.offset);
+      }
     });
   }
   /** One summary per chunk keeps the small Diagnostics history useful. */
   summarizeWords() {
     if (!this.wordStats) return;
-    const { index, highlighted, events, total } = this.wordStats;
-    this.onEvent(`chunk=${index + 1} words highlighted=${highlighted.size} of ${total}`
+    const { index, highlighted, events, total, failures } = this.wordStats;
+    this.onEvent(`chunk=${index + 1} words highlighted=${highlighted.size} of ${total} word failures=${failures}`
       + (events ? '' : ' boundary events=none fallback=sentence'));
     this.wordStats = null;
   }
@@ -291,7 +363,7 @@ export class WordReader {
   /** Coalesce pending requests; retry once in a fresh batch after a host failure. */
   highlight(index, chunk, yellowMode) {
     this.summarizeWords();
-    this.wordStats = { index, events: 0, highlighted: new Set(),
+    this.wordStats = { index, events: 0, failures: 0, highlighted: new Set(),
       total: [...chunk.matchAll(/[\p{L}\p{N}]+(?:['’\-][\p{L}\p{N}]+)*/gu)].length };
     this.requestedIndex = index;
     const generation = ++this.generation;
@@ -327,18 +399,20 @@ export class WordReader {
             this.drift = this.mappedDrift;
             try { await this.cacheWords(context, range, index, chunk, generation); }
             catch (error) {
+              if (generation !== this.generation) return;
               // A voice can still read with sentence selection if word lookup fails.
-              this.onEvent(`word fallback=sentence reason=${error.message || error}`);
+              this.wordFailure(index, 'cache-words', error);
               this.releaseCurrent();
               this.current = { range: range.getRange(), index, offset: this.mappedOffset, words: [] };
               this.current.range.track();
+              await context.sync();
             }
             this.onEvent(`select ${label} method=position-search match=${this.match} drift=${this.drift >= 0 ? '+' : ''}${this.drift}`);
           });
           break;
         } catch (caught) {
           method = 'not-found';
-          error = [caught.code, caught.message].filter(Boolean).join(': ') || String(caught);
+          error = describeError(caught);
           this.onEvent(`selection lost ${label} recovery=kept-previous error=${error}`);
           this.onEvent(`select ${label} method=position-search error=${error} retry=${attempt}`);
         }

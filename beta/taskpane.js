@@ -1,13 +1,13 @@
 /** UI glue: connects DOM controls, Office lifecycle, WordReader, and Player.
  * No exports; loading this module registers pane controls and document shortcuts.
  */
-import { EventLog, copyLog } from './lib/event-log.js?v=1.0.5';
-import { VERSION } from './lib/version.js?v=1.0.5';
-import { Player } from './lib/player.js?v=1.0.5';
-import { sentenceChunks } from './lib/splitter.js?v=1.0.5';
-import { filterVoices, pickDefault, buildFallbackOrder } from './lib/voices.js?v=1.0.5';
-import { loadSettings, saveSettings, normalizeRate } from './lib/settings.js?v=1.0.5';
-import { WordReader } from './word.js?v=1.0.5';
+import { EventLog, copyLog } from './lib/event-log.js?v=1.0.6';
+import { VERSION } from './lib/version.js?v=1.0.6';
+import { Player } from './lib/player.js?v=1.0.6';
+import { sentenceChunks } from './lib/splitter.js?v=1.0.6';
+import { filterVoices, pickDefault, buildFallbackOrder } from './lib/voices.js?v=1.0.6';
+import { loadSettings, saveSettings, normalizeRate } from './lib/settings.js?v=1.0.6';
+import { WordReader } from './word.js?v=1.0.6';
 // Register document shortcuts before settings, voices, or asynchronous setup can fail.
 if (window.Office)
   Office.onReady(() => {

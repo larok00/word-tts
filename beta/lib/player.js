@@ -1,7 +1,7 @@
 /** Speech state machine, independent of UI and Office. Exports Player; injected
  * engine and clock make retries, stale events, and watchdogs testable.
  */
-import { normalizeRate } from './settings.js?v=1.0.5';
+import { normalizeRate } from './settings.js?v=1.0.6';
 export class Player {
   /** Inject the engine and clock so state transitions can be tested without speech. */
   constructor({
