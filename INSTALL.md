@@ -23,7 +23,7 @@ over HTTPS. It's hosted on **GitHub Pages from this (public) repo**:
 
 ### Publishing an update (no reinstall needed)
 After an update, fully close Word and reopen it. The pane footer shows the running
-version (for example **Read Aloud+ v1.0.5**); check it before testing. App files use
+version (for example **Read Aloud+ v1.0.6**); check it before testing. App files use
 network-first caching with an offline fallback:
 ```bash
 cd addin

@@ -19,13 +19,22 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
   const colors = new Map();
   const context = { sync: async () => {} };
   const tracked = new Set();
-  let searches = 0;
+  let searches = 0, batch = 0;
   class Range {
     /** Each range belongs to a single simulated Word request context. */
     constructor(start, end) {
       this.start = start;
       this.end = end;
       this.context = context;
+    }
+    /** Search collection items expire even if the item itself was tracked. */
+    check() {
+      if ((this.searchBatch !== undefined && this.searchBatch !== batch)
+        || (this.copyBatch !== undefined && this.copyBatch !== batch && !tracked.has(this))) {
+        throw Object.assign(new Error('Search item belongs to a released collection'), {
+          code: 'GeneralException', debugInfo: { errorLocation: 'Range.select' },
+        });
+      }
     }
     /** Locate the paragraph containing this range's start. */
     get paragraphs() {
@@ -38,6 +47,7 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
     }
     /** Property loading queues no work in this synchronous document model. */
     load() {
+      this.check();
       return this;
     }
     /** Preserve range objects across simulated run batches. */
@@ -51,21 +61,28 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
     }
     /** Produce independently tracked range proxies for start/end/full scope. */
     getRange(location) {
-      if (location === 'Start') return new Range(this.start, this.start);
-      if (location === 'End') return new Range(this.end, this.end);
-      return new Range(this.start, this.end);
+      this.check();
+      const copy = location === 'Start' ? new Range(this.start, this.start)
+        : location === 'End' ? new Range(this.end, this.end) : new Range(this.start, this.end);
+      copy.copyBatch = batch;
+      return copy;
     }
     /** Expand in document order, as required for cursor-to-end reading. */
     expandTo(other) {
+      this.check();
+      other.check();
       const range = new Range(Math.min(this.start, other.start), Math.max(this.end, other.end));
       range.expanded = true;
       return range;
     }
     compareLocationWith(other) {
+      this.check();
+      other.check();
       return { value: this.start === other.start && this.end === other.end ? 'Equal' : 'Unrelated' };
     }
     /** Record user-visible document selection changes. */
     select() {
+      this.check();
       selected = [this.start, this.end];
       if (context.select) context.select([this.start, this.end]);
       else selections.push([this.start, this.end]);
@@ -80,7 +97,9 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
       for (let position = text.indexOf(needle, this.start);
         position >= 0 && position + needle.length <= this.end;
         position = text.indexOf(needle, position + Math.max(1, needle.length))) {
-        items.push(new Range(position, position + needle.length));
+        const item = new Range(position, position + needle.length);
+        item.searchBatch = batch;
+        items.push(item);
       }
       return {
         items,
@@ -112,6 +131,7 @@ function documentFixture(text, selectionStart = 0, selectionEnd = 0, color = nul
   globalThis.Word = {
     /** Reject cross-context use: tracked objects must be passed back to Word.run. */
     async run(anchor, callback) {
+      batch++;
       if (typeof anchor === 'function') return anchor(context);
       assert.ok(tracked.has(anchor));
       assert.equal(anchor.context, context);
@@ -658,4 +678,105 @@ test('missing end search uses the safe prefix and reports the fallback', async (
   assert.deepEqual(f.selections.at(-1), [0, mapChunkToSearch(chunk).length]);
   assert.match(events.join('\n'), /fallback=prefix reason=end-not-found/);
   await reader.cleanup();
+});
+
+test('raw search items expire across batches while tracked standalone copies survive', async () => {
+  documentFixture('One two.', 0, 8);
+  let raw, copy;
+  await Word.run(async (context) => {
+    const results = context.document.body.search('One', { matchCase: true });
+    results.load('items');
+    await context.sync();
+    raw = results.items[0]; raw.track();
+    copy = raw.getRange(); copy.track();
+    await context.sync();
+  });
+  for (const use of [(r) => r.select(), (r) => r.getRange(), (r) => r.expandTo(copy),
+    (r) => r.compareLocationWith(copy), (r) => r.load('text')]) {
+    await assert.rejects(Word.run(raw, async () => use(raw)), (error) =>
+      error.code === 'GeneralException' && error.debugInfo.errorLocation === 'Range.select');
+  }
+  await Word.run(copy, async (context) => { copy.select(); await context.sync(); });
+});
+
+async function wordFixture() {
+  const text = 'Same same same.';
+  const f = documentFixture(text, 0, text.length);
+  const reader = new WordReader();
+  const events = [];
+  reader.onEvent = (event) => events.push(event);
+  await reader.read(); reader.chunks = [text];
+  await reader.highlight(0, text, false);
+  return { ...f, reader, events };
+}
+function wordSelectError() {
+  return Object.assign(new Error('Host rejected selection'), { code: 'GeneralException',
+    debugInfo: { errorLocation: 'Range.select', statement: 'range.select();' } });
+}
+
+test('standalone word bookmarks highlight every word under strict batch ownership', async () => {
+  const f = await wordFixture();
+  for (const offset of [0, 5, 10]) await f.reader.wordBoundary(0, offset, 0);
+  assert.deepEqual(f.selections, [[0, 15], [0, 4], [5, 9], [10, 14]]);
+  await f.reader.finish();
+  assert.match(f.events.join('\n'), /words highlighted=3 of 3 word failures=0/);
+  assert.doesNotMatch(f.events.join('\n'), /fallback=sentence/);
+  await f.reader.cleanup();
+  assert.equal(f.tracked.size, 0);
+});
+
+test('fresh word search recovers the same repeated occurrence and replaces its bookmark', async () => {
+  const f = await wordFixture();
+  const word = f.reader.current.words[2];
+  const stale = word.range;
+  stale.select = () => { throw wordSelectError(); };
+  await f.reader.wordBoundary(0, 10, 0);
+  assert.deepEqual(f.selections.at(-1), [10, 14]);
+  assert.notEqual(word.range, stale);
+  assert.equal(f.tracked.has(stale), false);
+  assert.match(f.events.join('\n'), /step=select-cached code=GeneralException .*location=Range.select statement=range.select\(\);/);
+  assert.match(f.events.join('\n'), /word retry=fresh-search ok/);
+  await f.reader.wordBoundary(0, 10, 0);
+  await f.reader.finish();
+  assert.match(f.events.join('\n'), /words highlighted=1 of 3 word failures=1/);
+  await f.reader.cleanup();
+  assert.equal(f.tracked.size, 0);
+});
+
+test('persistent word failures keep the sentence selected and log detail only once', async () => {
+  const f = await wordFixture();
+  const prototype = Object.getPrototypeOf(f.reader.current.range);
+  const select = prototype.select;
+  let attempts = 0;
+  prototype.select = function() { attempts++; throw wordSelectError(); };
+  for (const offset of [0, 5, 10]) await f.reader.wordBoundary(0, offset, 0);
+  prototype.select = select;
+  assert.equal(attempts, 6, 'each word has exactly one retry');
+  assert.deepEqual(f.selections, [[0, 15]]);
+  await f.reader.finish();
+  const log = f.events.join('\n');
+  assert.equal(f.events.filter((event) => event.includes('word fallback=sentence')).length, 1);
+  assert.equal(f.events.filter((event) => event.includes('word retry=')).length, 1);
+  assert.match(log, /word retry=fresh-search failed code=GeneralException .*location=Range.select/);
+  assert.match(log, /words highlighted=0 of 3 word failures=3/);
+  await f.reader.cleanup();
+  assert.equal(f.tracked.size, 0);
+});
+
+test('failure after a successful word restores the sentence only once', async () => {
+  const f = await wordFixture();
+  await f.reader.wordBoundary(0, 0, 0);
+  const prototype = Object.getPrototypeOf(f.reader.current.range);
+  const select = prototype.select;
+  prototype.select = function() {
+    if (this.end - this.start < 15) throw wordSelectError();
+    return select.call(this);
+  };
+  try {
+    await f.reader.wordBoundary(0, 5, 0);
+    await f.reader.wordBoundary(0, 10, 0);
+    assert.deepEqual(f.selections, [[0, 15], [0, 4], [0, 15]]);
+  } finally { prototype.select = select; }
+  await f.reader.cleanup();
+  assert.equal(f.tracked.size, 0);
 });

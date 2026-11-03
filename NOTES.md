@@ -469,7 +469,17 @@ range reliability, latency, clipboard and cold ribbon activation.
 `agent-prompts/07-round5-fixes.md`. Next Windows retest:
 `testing/windows-e2e-round6-codex-prompt.md` (judged mainly from the Diagnostics event log).
 
-## Krystof feedback (v1.0.5)
+## Krystof feedback (v1.0.6)
+
+The v1.0.5 beta received word boundaries but every word selection failed in real
+Word. It saved search collection items for later batches; tracking the item did
+not keep its parent collection alive. Word bookmarks now use standalone range
+copies and flush tracking before the batch ends. A failed word selection retries
+once with a fresh search inside the chunk, preserving repeated-word positions.
+Persistent failures leave the existing selection in place without repeated sentence
+selection. Diagnostics keeps the first Office error's code, message and failing
+call, then counts failures in the chunk summary. A stricter mock reproduces the
+released-collection failure; real Word still needs a v1.0.6 retest.
 
 Krystof used v1.0.4 on a real multi-page English document in Word for Windows.
 His log showed successful position searches and normal completion. These fixes
@@ -516,12 +526,10 @@ are verified with mocks locally; they are not a claim of a new Windows test.
   and one `words highlighted=K of M` summary per chunk, including missing events.
   Help and installation notes describe the option.
 
-Verification: **151 JS tests passed, 0 failed** with
-`cd addin && node --test --test-isolation=none test/*.test.mjs`.
-`BASE_URL=https://larok00.github.io/word-tts npm run build` passed.
-`~/.bend/bin/bend bend/splitter_test.bend`: **27 passed, 0 failed**.
-The packaged `addin/dist/install/manifest.xml` has Version **1.0.5.0**;
-its URL sequence is unchanged from v1.0.4, with no query strings.
+Verification for v1.0.6: **156 JS tests passed, 0 failed** with
+`cd addin && npm test`; `npm run build` passed.
+The packaged `addin/dist/install/manifest.xml` has Version **1.0.6.0**;
+manifest URLs remain query-string-free. The footer shows **Read Aloud+ v1.0.6**.
 **No bend/ files changed**; the generated JavaScript splitter is unchanged.
 No network, commit, push or git configuration changes were made.
 
